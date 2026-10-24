@@ -331,6 +331,32 @@ async def profile_content(request: Request) -> dict:
     return {"result": await content.digest(SessionLocal, request.app.state.llm, today, force=True)}
 
 
+@router.get("/days")
+async def days_list(n: int = 30) -> dict:
+    """The snapshots of the last days (what the owner was like each day), newest first."""
+    from apa import assistant_memory
+
+    snaps = await assistant_memory.days(SessionLocal, max(1, min(n, 400)))
+    return {"days": [{k: v for k, v in d.items() if k != "facts"} for d in reversed(snaps)]}
+
+
+@router.post("/days/build")
+async def days_build(request: Request, day: str | None = Body(default=None, embed=True)) -> dict:
+    """Write the snapshot of a day now (default: today), and refresh the long-term personality. They also run every night."""
+    from datetime import date, datetime
+    from zoneinfo import ZoneInfo
+
+    from apa import daily
+
+    tz = ZoneInfo(get_settings().timezone)
+    try:
+        d = date.fromisoformat(day) if day else datetime.now(tz).date()
+    except ValueError:
+        raise HTTPException(status_code=400, detail="day must be YYYY-MM-DD") from None
+    built = await daily.build_day(SessionLocal, request.app.state.llm, tz, d)
+    return {"built": built, "day": d.isoformat(), "persona": await daily.persona(SessionLocal, request.app.state.llm, d, force=True)}
+
+
 @router.get("/profile")
 async def get_profile() -> dict:
     """The patterns computed from the owner's data (sleep, activity, food, spending, steps, stress, interests)."""

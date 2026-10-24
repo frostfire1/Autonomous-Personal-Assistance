@@ -811,3 +811,21 @@ def test_the_companion_only_starts_chats_in_the_morning_midday_and_evening():
     at = lambda h, m=0: companion.slot_for(datetime(2026, 3, 10, h, m, tzinfo=tz))  # noqa: E731
     assert at(9)[0] == "morning" and at(13)[0] == "midday" and at(20)[0] == "evening"
     assert at(7) is None and at(11) is None and at(16) is None and at(22) is None and at(2) is None
+
+
+# ---- the snapshot of a day -------------------------------------------------------------------------------------------------------
+
+
+def test_a_day_gets_plain_tags_from_its_facts_and_the_ai_reply_is_validated():
+    from apa import daily
+
+    f = {"spend": {"count": 7}, "usage": {"hours": 9.1, "late": True, "categories": {"games": 0.55, "video": 0.2}},
+         "health": {"steps": 9100, "sleep_mins": 300, "stress": 80}}
+    assert daily.tags(f) == ["gaming day", "up late", "heavy screen day", "many purchases", "on the move", "short sleep", "stressed"]
+    assert daily.tags({"spend": {"count": 0}, "youtube": {"counts": {"watched": 3}}}) == ["quiet wallet"]
+    good = ('{"headline": "A long gaming day, up late", "personality": ["restless", "playful", 3], "mood": 4, "energy": "high", '
+            '"focus": "ranked matches", "note": "Spent the day gaming."}')
+    out = daily.parse_day(good)
+    assert out and out["personality"] == ["restless", "playful"] and out["mood"] == 4 and out["energy"] == "high"
+    assert daily.parse_day('{"headline": "x"}') is None and daily.parse_day("nonsense") is None
+    assert daily.parse_day('{"headline": "A calm day", "mood": 9, "energy": "wild"}')["mood"] is None

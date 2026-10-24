@@ -443,7 +443,7 @@ async def test_the_diary_is_written_from_the_days_chat_and_the_assistant_can_rec
     assert await mem.delete_learned(stack, 1) and len(await mem.learned(stack)) == 1 and not await mem.delete_learned(stack, 9)
     assert await mem.delete_episode(stack, now.date().isoformat()) and await mem.episodes(stack) == []
     export = await mem.export_all(stack)
-    assert set(export) == {"notes", "learned", "diary", "journal"}
+    assert set(export) == {"notes", "learned", "diary", "journal", "days"}
 
 
 async def test_a_day_with_almost_no_chat_writes_no_diary_entry(stack):
@@ -725,13 +725,13 @@ async def test_the_ai_content_trait_is_written_only_when_the_data_changed_and_su
 
 
 async def test_the_nightly_diary_reads_shared_journal_entries_and_never_private_ones(stack):
-    from datetime import date, datetime
+    from datetime import datetime
 
     from apa import assistant_memory as mem
 
     now = datetime.now(TZ)
-    await mem.journal_add(stack, date.today(), "hari ini makan sate dan senang sekali", shared=True)
-    await mem.journal_add(stack, date.today(), "rahasia pribadi yang tidak boleh dibaca AI", shared=False)
+    await mem.journal_add(stack, now.date(), "hari ini makan sate dan senang sekali", shared=True)
+    await mem.journal_add(stack, now.date(), "rahasia pribadi yang tidak boleh dibaca AI", shared=False)
     seen = []
 
     class Llm:
@@ -794,7 +794,7 @@ async def test_the_style_trait_survives_a_refresh_when_the_chat_is_gone_and_guid
 
 async def test_the_companion_starts_a_chat_with_manners_and_the_reply_continues_it(stack, redis, monkeypatch):
     import time
-    from datetime import datetime
+    from datetime import datetime, timedelta
 
     from sqlalchemy import select
 
@@ -823,7 +823,12 @@ async def test_the_companion_starts_a_chat_with_manners_and_the_reply_continues_
         assert [m.body for m in (await s.execute(select(TelegramMessage))).scalars()] == reply
     assert await companion.run(stack, Llm(), redis, n, TZ, now) == "too_soon"  # two hours between proactive messages
     await redis.delete(companion.LAST_KEY)
-    await raw_event(stack, "lagi sibuk nih", source="telegram_shorthand", status="skipped")  # the owner is chatting right now
+    ev = await raw_event(stack, "lagi sibuk nih", source="telegram_shorthand", status="skipped")  # the owner is chatting right now
+    async with stack() as s:
+        from sqlalchemy import text as sql
+
+        await s.execute(sql("update inbound_events set received_at = :t where id = :i"), {"t": now - timedelta(minutes=5), "i": ev})
+        await s.commit()
     assert await companion.run(stack, Llm(), redis, n, TZ, now) == "busy" and len(n.sent) == 1
 
     # two unanswered messages: it stops until the owner writes
@@ -839,3 +844,51 @@ async def test_the_companion_starts_a_chat_with_manners_and_the_reply_continues_
     reply[0] = "NOTHING"  # nothing real to say: silence, not a canned message
     await redis.delete(companion.SENDS_KEY, companion.LAST_KEY)
     assert await companion.run(stack, Llm(), redis, n, TZ, now) == "nothing" and len(n.sent) == 1
+
+
+async def test_a_day_snapshot_is_built_from_everything_stored_searched_and_feeds_the_persona(stack):
+    from datetime import datetime, timedelta
+
+    from sqlalchemy import select, text
+
+    from apa import assistant_memory as mem
+    from apa import daily, usage
+    from apa.chat.tools import run_read
+    from apa.db.models.intel import ProfileTrait
+
+    now = datetime.now(TZ)
+    day = now.date()
+    await usage.store(stack, "phone", "android", day, [{"app": "Mobile Legends", "seconds": 9000, "first_at": datetime.now(UTC).replace(hour=1)}, {"app": "YouTube", "seconds": 1800}])
+    await mem.add_watch(stack, {day: [{"k": "watched", "c": "Delta Force ID", "t": "Season baru"}, {"k": "listened", "c": "Tulus", "t": "Lagu"}]})
+    await mem.add_episode(stack, day, "Owner main game seharian dan makan sate.")
+    await mem.add_observations(stack, day, [{"type": "meal", "text": "sate", "at": "19:00", "mood": None}])
+    await mem.journal_add(stack, day, "ENTRI RAHASIA PRIBADI", shared=False)
+    await commit(stack, await new_event(stack, parsed(amount="35000", merchant="WARUNG SATE"), at=now))
+    seen = []
+
+    class Llm:
+        async def complete(self, route, system, user, **kw):
+            seen.append(user)
+            body = {"headline": "A gaming day with a satisfying dinner", "personality": ["playful", "absorbed"], "mood": 4, "energy": "medium",
+                    "focus": "ranked games", "note": "Mostly games, then sate for dinner."}
+            if "stable personality" in system:
+                body = {"summary": "Loves games and good food; evenings are for relaxing.", "traits": ["playful"], "interests": ["games", "food"]}
+            return LLMResult(json.dumps(body), "fake", 10, 10, 0)
+
+    assert await daily.build_day(stack, Llm(), TZ, day)
+    assert "Mobile Legends" in seen[0] and "Delta Force ID" in seen[0] and "sate" in seen[0] and "RAHASIA" not in seen[0]  # private journal never read
+    snaps = await mem.days(stack, 3)
+    assert len(snaps) == 1 and snaps[0]["headline"].startswith("A gaming day") and "gaming day" in snaps[0]["tags"]
+    async with stack() as s:
+        raw = (await s.execute(text("select text from memory_items where kind = 'day'"))).scalars().all()
+    assert len(raw) == 1 and "gaming" not in raw[0]  # stored encrypted
+    assert "DAYS" in await run_read(stack, TZ, now, "recall", {"query": "gaming"})  # searchable by the assistant
+    assert await mem.learned(stack) == [] or all(i["kind"] != "day" for i in await mem.learned(stack))
+
+    # a persona needs enough days; with them it is written once and kept across profile refreshes
+    assert await daily.persona(stack, Llm(), day) == "skipped"
+    for i in range(1, 6):
+        await mem.add_day(stack, day - timedelta(days=i), {"date": (day - timedelta(days=i)).isoformat(), "headline": f"Day {i}", "personality": ["calm"], "mood": 3, "tags": []})
+    assert await daily.persona(stack, Llm(), day) == "written" and await daily.persona(stack, Llm(), day) == "unchanged"
+    async with stack() as s:
+        assert "Loves games" in (await s.execute(select(ProfileTrait.summary).where(ProfileTrait.key == "ai.persona"))).scalar_one()

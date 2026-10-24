@@ -443,6 +443,10 @@ async def memory_digest(ctx: dict) -> str:
         from apa import content
 
         await content.digest(sm, ctx["llm"], now.date())
+        from apa import daily
+
+        await daily.build_recent(sm, ctx["llm"], tz, now.date())
+        await daily.persona(sm, ctx["llm"], now.date())
         await retention.catch_up(sm, ctx["llm"], tz, now.date())
         await retention.prune(sm, tz, now, get_settings().chat_keep_days)
     except Exception as exc:

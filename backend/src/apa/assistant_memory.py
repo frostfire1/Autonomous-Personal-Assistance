@@ -46,6 +46,7 @@ KINDS = ("person", "preference", "goal", "routine", "plan", "health", "other")
 OBS = "obs"  # a structured observation of the day (meal, mood, like...): data for the profile, never shown as text or searched
 OBS_TYPES = ("meal", "drink", "mood", "activity", "like", "dislike", "health", "place", "person", "other")
 MAX_OBS_PER_DAY = 12
+DAY = "day"  # the snapshot of one day: what the owner was like (see apa.daily)
 WATCH = "watch"  # what the owner watched or searched on YouTube (their Takeout export), one row per item
 _CLOCK = re.compile(r"^([01]?\d|2[0-3]):([0-5]\d)$")
 UNREADABLE = "[cannot be read: the encryption key is missing or has changed]"
@@ -304,6 +305,43 @@ async def add_watch(sm: async_sessionmaker, by_day: dict[date, list[dict]]) -> i
     return len(rows)
 
 
+async def add_day(sm: async_sessionmaker, day: date, snap: dict) -> None:
+    """Write (or replace) the snapshot of one day. It may be searched by the assistant, so it is `shared`; it holds aggregates and
+    an AI-written description, never raw chat and never a private journal entry."""
+    row = _row(DAY, json.dumps(snap, ensure_ascii=False), day=day, source="auto", shared=True)
+    async with sm() as s:
+        await s.execute(delete(MemoryItem).where(MemoryItem.kind == DAY, MemoryItem.day == day))
+        s.add(row)
+        await s.flush()
+        await _trim(s, MemoryItem.kind == DAY, 400)
+        await s.commit()
+
+
+async def days(sm: async_sessionmaker, n: int = 30, today: date | None = None) -> list[dict]:
+    """The snapshots of the last `n` days, oldest first."""
+    since = (today or date.today()) - timedelta(days=n)
+    out = []
+    for r in await _items(sm, MemoryItem.kind == DAY, MemoryItem.day >= since):
+        try:
+            d = json.loads(_open(r))
+        except ValueError:
+            continue
+        if isinstance(d, dict):
+            out.append(d)
+    return out
+
+
+async def search_days(sm: async_sessionmaker, query: str | None, n: int = 60, limit: int = 5) -> list[dict]:
+    """Snapshots matching the words of `query` (headline, personality, tags, apps, categories, channels...), best first; the
+    latest ones when there is no query."""
+    snaps = await days(sm, n)
+    words = re.findall(r"\w{2,}", (query or "").lower())
+    if not words:
+        return snaps[-limit:]
+    scored = sorted(((_score(json.dumps(d, ensure_ascii=False).lower(), words), d["date"], d) for d in snaps), key=lambda x: (x[0], x[1]), reverse=True)
+    return [d for sc, _, d in scored if sc][:limit]
+
+
 async def replace_api_watch(sm: async_sessionmaker, day: date, items: list[dict]) -> int:
     """Replace what the YouTube account sync stored earlier (liked videos, subscriptions). -> items stored."""
     rows = []
@@ -343,7 +381,7 @@ async def search_diary(sm: async_sessionmaker, query: str | None, days: int) -> 
 
 # ---- learned items ----------------------------------------------------------------------------------------------------------
 
-_LEARNED = ~MemoryItem.kind.in_(("note", "diary", "journal", OBS, WATCH))
+_LEARNED = ~MemoryItem.kind.in_(("note", "diary", "journal", OBS, WATCH, DAY))
 
 
 async def learned(sm: async_sessionmaker) -> list[dict]:
@@ -459,4 +497,5 @@ async def search_items(sm: async_sessionmaker, query: str, limit: int = 8) -> li
 
 async def export_all(sm: async_sessionmaker) -> dict:
     """Everything the assistant keeps about the owner, decrypted, for the owner to read or take away (authenticated)."""
-    return {"notes": await load(sm), "learned": await learned(sm), "diary": await episodes(sm), "journal": await journal_list(sm, 5000)}
+    return {"notes": await load(sm), "learned": await learned(sm), "diary": await episodes(sm), "journal": await journal_list(sm, 5000),
+            "days": await days(sm, 400)}
