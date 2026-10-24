@@ -62,6 +62,8 @@ class Settings(BaseSettings):
     notification_llm_per_hour: int = 30
     # Telegram says so when the phone app has not checked in for this many hours
     phone_silent_hours: int = 2
+    # Raw chat text older than this many days is erased once the diary has captured it (0 = keep for ever)
+    chat_keep_days: int = 7
 
     # Safety defaults; the live values come from policy_rules (Web UI > Settings)
     undo_window_hours: int = 24

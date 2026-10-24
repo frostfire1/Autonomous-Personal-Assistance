@@ -381,11 +381,25 @@ async def memory_digest(ctx: dict) -> str:
 
     tz = ZoneInfo(get_settings().timezone)
     sm = ctx.get("sessionmaker", SessionLocal)
+    from apa import profile
+
     try:
-        written = await assistant_memory.summarize_day(sm, ctx["llm"], datetime.now(tz).date(), tz)
+        await profile.refresh(sm, tz)  # patterns from the data: no model involved, so it runs even when the model is down
+    except Exception as exc:
+        log.warning("profile_refresh_failed", error=type(exc).__name__)
+    from apa import retention
+
+    now = datetime.now(tz)
+    try:
+        written = await assistant_memory.summarize_day(sm, ctx["llm"], now.date(), tz)
     except Exception as exc:  # a model outage skips one night; the dashboard button can fill it in
         log.warning("memory_digest_failed", error=type(exc).__name__)
-        return "failed"
+        written = None
+    try:  # days the diary missed are written first, then chat older than the retention window is erased
+        await retention.catch_up(sm, ctx["llm"], tz, now.date())
+        await retention.prune(sm, tz, now, get_settings().chat_keep_days)
+    except Exception as exc:
+        log.warning("chat_retention_failed", error=type(exc).__name__)
     return "written" if written else "skipped"
 
 

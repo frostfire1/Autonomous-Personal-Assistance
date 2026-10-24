@@ -1,9 +1,21 @@
 """News, cyber advisories, homelab watchlist, research reports."""
 
-from datetime import datetime
+from datetime import date, datetime
 from decimal import Decimal
 
-from sqlalchemy import BigInteger, Boolean, CheckConstraint, Numeric, String, Text
+from sqlalchemy import (
+    BigInteger,
+    Boolean,
+    CheckConstraint,
+    Date,
+    Index,
+    Integer,
+    Numeric,
+    String,
+    Text,
+    UniqueConstraint,
+    func,
+)
 from sqlalchemy.dialects.postgresql import ARRAY, JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -79,3 +91,52 @@ class Briefing(Base):
     played_at: Mapped[datetime | None]
 
     __table_args__ = (CheckConstraint("kind IN ('short','full')", name="kind_valid"),)
+
+
+class MemoryItem(Base):
+    """What the assistant remembers about the owner, one row each: a note the owner asked it to keep, something it learned
+    from the chats (person, preference, goal, routine, plan, health), a day's diary summary, or an entry of the owner's own
+    private journal. `text` is Fernet ciphertext when `enc` is true; `shared` says whether the assistant may read the entry."""
+
+    __tablename__ = "memory_items"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    kind: Mapped[str] = mapped_column(String(12))  # note|diary|journal|person|preference|goal|routine|plan|health|other
+    text: Mapped[str] = mapped_column(Text)
+    day: Mapped[date | None] = mapped_column(Date)
+    source: Mapped[str] = mapped_column(String(8), server_default="owner")  # owner | auto
+    enc: Mapped[bool] = mapped_column(Boolean, server_default="false")
+    shared: Mapped[bool] = mapped_column(Boolean, server_default="true")
+    created_at: Mapped[created_at_col]
+
+    __table_args__ = (Index("ix_memory_items_kind_day", "kind", "day"),)
+
+
+class ProfileTrait(Base):
+    """A pattern computed from the owner's own data (sleep, meals, spending, activity, interests): code computes it, the
+    assistant only words it. Recomputed every night."""
+
+    __tablename__ = "profile_traits"
+
+    key: Mapped[str] = mapped_column(String(48), primary_key=True)
+    summary: Mapped[str] = mapped_column(Text)
+    data: Mapped[dict] = mapped_column(JSONB, server_default="{}")
+    evidence: Mapped[int] = mapped_column(Integer, server_default="0")  # how many observations it rests on
+    computed_at: Mapped[datetime] = mapped_column(server_default=func.now())
+
+
+class AppUsage(Base):
+    """Active seconds per app, per day and device (ActivityWatch or anything that pushes the same shape). App names only."""
+
+    __tablename__ = "app_usage"
+    __table_args__ = (UniqueConstraint("day", "device", "app", name="uq_app_usage"), Index("ix_app_usage_day", "day"))
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    day: Mapped[date] = mapped_column(Date)
+    device: Mapped[str] = mapped_column(String(40))
+    kind: Mapped[str] = mapped_column(String(12), server_default="other")
+    app: Mapped[str] = mapped_column(String(120))
+    seconds: Mapped[int] = mapped_column(Integer)
+    first_at: Mapped[datetime | None]
+    last_at: Mapped[datetime | None]
+    updated_at: Mapped[datetime] = mapped_column(server_default=func.now())

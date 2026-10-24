@@ -20,6 +20,9 @@ async def stack(monkeypatch):
     monkeypatch.setenv("REDIS_URL", REDIS)
     monkeypatch.setenv("INGEST_API_KEY", "test-key")
     monkeypatch.setenv("WEATHER_ENABLED", "false")  # tests never reach Open-Meteo unless they say so
+    from cryptography.fernet import Fernet
+
+    monkeypatch.setenv("SECRETS_KEY", Fernet.generate_key().decode())  # the diary and memory refuse to store without a key
     from apa.core.settings import get_settings
 
     get_settings.cache_clear()

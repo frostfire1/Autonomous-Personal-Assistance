@@ -104,6 +104,7 @@ keep_or() {  # keep a real value already in .env, else set the generated one
 }
 keep_or POSTGRES_PASSWORD "$(rand 16)"; keep_or APP_DB_PASSWORD "$(rand 16)"
 keep_or LITELLM_MASTER_KEY "sk-$(rand 16)"; keep_or INGEST_API_KEY "$(rand 20)"
+keep_or SECRETS_KEY "$(openssl rand -base64 32 | tr '+/' '-_' | tr -d '[:space:]')"  # encrypts the diary and the assistant's memory: back it up, losing it loses them
 [ -n "$(getv POSTGRES_USER)" ] || setv POSTGRES_USER apa_owner
 [ -n "$(getv POSTGRES_DB)" ] || setv POSTGRES_DB apa
 [ -n "$(getv APP_DB_USER)" ] || setv APP_DB_USER apa_app
@@ -187,4 +188,5 @@ say "Done."
 say "  Web dashboard : http://$HOST:$(getv WEB_PORT || echo 3000)"
 say "  Sign in with  : the API key in the .env file (INGEST_API_KEY)"
 say "  Next          : open the "Get started" page in the dashboard. AI providers and models, agents, voice, news and storage are set there."
+say "  IMPORTANT     : back up SECRETS_KEY from .env. It encrypts your diary and the assistant's memory; without it they cannot be read."
 say "  Android app   : enter http://$HOST:$(getv API_PORT || echo 8000) and the same key."

@@ -420,7 +420,7 @@ def test_the_read_tools_validate_their_arguments_and_say_what_is_wrong():
     from apa.chat.tools import READ_TOOLS, run_read
 
     now, tz = datetime.now(UTC), ZoneInfo("Asia/Jakarta")
-    assert {"transactions", "spending", "budgets", "balances", "sleep", "cve", "news", "recall"} == set(READ_TOOLS)
+    assert {"transactions", "spending", "budgets", "balances", "sleep", "cve", "news", "recall", "profile"} == set(READ_TOOLS)
     for name, args in (("transactions", {"days": 9999}), ("spending", {"period": "decade"}), ("sleep", {"days": 0}),
                        ("news", {"limit": 99}), ("transactions", {"drop": "table"})):
         assert asyncio.run(run_read(None, tz, now, name, args)).startswith("Bad arguments")
@@ -475,3 +475,170 @@ def test_the_nightly_digest_reply_is_read_into_a_summary_and_lasting_items():
     many = '{"summary": "x y z a b c d e f", "learned": [' + ",".join(f'{{"kind": "goal", "text": "tujuan nomor {i}"}}' for i in range(20)) + "]}"
     assert len(parse_digest(many)[1]) == MAX_PER_DAY
     assert parse_digest('{"summary": "kartu 4111 1111 1111 1111 ok ya", "learned": []}')[0] == "kartu [number] ok ya"  # numbers scrubbed
+
+
+# ---- the profile: patterns computed from the owner's data -----------------------------------------------------------------------
+
+
+def _day(n, h=12, m=0):
+    from datetime import UTC, datetime, timedelta
+
+    return datetime(2026, 10, 1, h, m, tzinfo=UTC) + timedelta(days=n)
+
+
+def test_sleep_is_summarised_from_the_nights_and_not_claimed_from_too_few():
+    from datetime import date
+
+    from apa.profile import sleep_trait
+
+    assert sleep_trait([(date(2026, 10, d), 400, 80) for d in range(1, 4)]) is None  # three nights: no claim
+    nights = [(date(2026, 10, d), 330 if date(2026, 10, d).weekday() < 5 else 450, 70 + d) for d in range(1, 15)]
+    t = sleep_trait(nights)
+    assert t.key == "sleep.duration" and t.evidence == 14
+    assert "weekdays 5h30" in t.summary and "weekends 7h30" in t.summary and "under 6 hours" in t.summary
+    assert t.data["min"] == 330 and t.data["max"] == 450 and 330 < t.data["avg_min"] < 450
+
+
+def test_activity_hours_are_inferred_from_the_first_and_last_thing_done_each_day():
+    from zoneinfo import ZoneInfo
+
+    from apa.profile import activity_trait
+
+    tz = ZoneInfo("Asia/Jakarta")
+    # UTC 00:30 is 07:30 in Jakarta; UTC 16:20 is 23:20; a day with a single event is ignored
+    stamps = [s for d in range(8) for s in (_day(d, 0, 30), _day(d, 5, 0), _day(d, 16, 20))] + [_day(20, 3, 0)]
+    t = activity_trait(stamps, tz)
+    assert t.evidence == 8 and "07:30" in t.summary and "23:20" in t.summary and "inferred" in t.summary
+    assert activity_trait([_day(d, 1, 0) for d in range(3)], tz) is None
+
+
+def test_food_habits_name_the_usual_meal_times_places_and_foods():
+    from zoneinfo import ZoneInfo
+
+    from apa.profile import food_trait
+
+    tz = ZoneInfo("Asia/Jakarta")
+    meals = [(_day(d, 5, 0), "Warteg Bahari", 25000) for d in range(6)] + [(_day(d, 13, 0), "Kopi Kenangan", 18000) for d in range(3)]
+    t = food_trait(meals, ["nasi goreng"] * 4 + ["es kopi susu"] * 2, tz, [180.0, 220.0], [30.0])
+    assert t.evidence == 9 and "lunch (6)" in t.summary and "dinner (3)" in t.summary  # UTC 05:00 is 12:00 in Jakarta, UTC 13:00 is 20:00
+    assert "Warteg Bahari (6x)" in t.summary and "nasi goreng (4x)" in t.summary and "caffeine about 200 mg" in t.summary
+    assert food_trait(meals[:3], [], tz, [], []) is None
+
+
+def test_spending_movement_stress_and_interests_are_computed_not_guessed():
+    from zoneinfo import ZoneInfo
+
+    from apa.profile import interest_trait, spending_trait, steps_trait, stress_trait
+
+    tz = ZoneInfo("Asia/Jakarta")
+    spends = [(_day(d, 3, 0), "Food & Dining", 20000) for d in range(6)] + [(_day(7, 3, 0), "Transport", 60000)]
+    t = spending_trait(spends, tz, 30)
+    assert "Food & Dining" in t.summary and "largest payment" in t.summary and t.data["total"] == 180000
+    assert steps_trait([4000, 8000, 6000, 0, 5000, 7000], [60, 62]).data["avg"] == 6000  # a zero day is a missing day
+    assert steps_trait([4000, 8000], []) is None
+    assert stress_trait([(_day(0, 3, 0), 40)] * 3, tz) is None  # too few readings
+    i = interest_trait(["lagi chaos kerjaan cyber security", "kerjaan cyber banyak", "cyber lagi ramai kerjaan"], ["bitcoin"],
+                       ["Suka kopi tanpa gula"], [("Entertainment", 10.0), ("Food & Dining", 5.0)])
+    assert "cyber (3x)" in i.summary and "kerjaan (3x)" in i.summary and "follows bitcoin" in i.summary and "Entertainment" in i.summary
+    assert "lagi" not in i.summary.split("learned")[0]  # stop words are not interests
+    assert interest_trait([], [], [], []) is None
+
+
+# ---- Telegram /diary: private, saved at once, the message removed ----------------------------------------------------------------
+
+
+def _diary_run(monkeypatch, text, *, fail_with=None):
+    import asyncio
+    from datetime import UTC, datetime
+
+    from apa import assistant_memory
+    from apa.bot import main as bot
+
+    saved, said, deleted = [], [], []
+
+    async def fake_add(sm, day, body, *, shared=False):
+        if fail_with:
+            raise fail_with
+        saved.append((body, shared))
+        return 1
+
+    class Msg:
+        def __init__(self):
+            self.text = text
+            self.date = datetime.now(UTC)
+
+        async def answer(self, reply, **kw):
+            said.append(reply)
+
+        async def delete(self):
+            deleted.append(True)
+
+    monkeypatch.setattr(assistant_memory, "journal_add", fake_add)
+    asyncio.run(bot._diary(Msg()))
+    return saved, said, deleted
+
+
+def test_the_diary_command_saves_privately_removes_the_message_and_never_repeats_it(monkeypatch):
+    saved, said, deleted = _diary_run(monkeypatch, "/diary hari ini aku sedih karena kerjaan")
+    assert saved == [("hari ini aku sedih karena kerjaan", False)]  # private: not shared with the AI
+    assert deleted == [True] and len(said) == 1 and "sedih" not in said[0] and "private diary" in said[0]
+
+
+def test_an_empty_diary_command_explains_itself_and_a_missing_key_saves_nothing(monkeypatch):
+    saved, said, deleted = _diary_run(monkeypatch, "/diary")
+    assert saved == [] and deleted == [] and "followed by your entry" in said[0]
+    from apa.core.secrets import SecretsUnavailable
+
+    saved, said, deleted = _diary_run(monkeypatch, "/diary rahasia", fail_with=SecretsUnavailable("no key"))
+    assert saved == [] and deleted == [] and "SECRETS_KEY" in said[0] and "rahasia" not in said[0]  # not saved, not deleted: nothing lost
+
+
+# ---- app usage (ActivityWatch), moods and likes in the profile -------------------------------------------------------------------
+
+
+def test_app_usage_is_categorised_and_becomes_a_screen_time_trait():
+    from datetime import UTC, date, datetime, timedelta
+    from zoneinfo import ZoneInfo
+
+    from apa import profile, usage
+
+    assert usage.category("com.whatsapp") == "messaging" and usage.category("YouTube") == "video" and usage.category("Zorg") == "other"
+    tz = ZoneInfo("Asia/Jakarta")
+    rows = []
+    for i in range(6):
+        day = date(2026, 1, 1) + timedelta(days=i)
+        late = datetime(2026, 1, 1 + i, 17, 30, tzinfo=UTC)  # 00:30 next day in Jakarta: up late
+        rows += [(day, "pc", "desktop", "Code", 7200, None), (day, "phone", "android", "YouTube", 3600, late if i < 3 else None)]
+    t = profile.usage_trait(rows, tz)
+    assert t and t.key == "screen_time" and t.evidence == 6 and "3.0 h a day" in t.summary and "Code" in t.summary
+    assert "after 23:00 on 3 of 6 days" in t.summary and t.data["late_days"] == 3
+    assert profile.usage_trait(rows[:4], tz) is None  # too few days: no claim
+
+
+def test_mood_and_likes_traits_need_enough_data_and_compare_with_sleep():
+    from datetime import date, timedelta
+
+    from apa import profile
+
+    days = [date(2026, 1, 1) + timedelta(days=i) for i in range(6)]
+    moods = [(d, 2 if i < 3 else 4) for i, d in enumerate(days)]
+    sleeps = [(d, 300 if i < 3 else 450) for i, d in enumerate(days)]
+    t = profile.mood_trait(moods, sleeps)
+    assert t and "3.0 of 5" in t.summary and "under 6.5 h of sleep 2.0, after more 4.0" in t.summary
+    assert profile.mood_trait(moods[:3], sleeps) is None
+    likes = profile.likes_trait([("like", "kopi"), ("like", "Kopi"), ("dislike", "macet"), ("meal", "nasi")])
+    assert likes and "Likes: kopi" in likes.summary and "Dislikes: macet" in likes.summary
+    assert profile.likes_trait([("like", "kopi")]) is None
+
+
+def test_digest_observations_are_validated():
+    import json
+
+    from apa import assistant_memory as mem
+
+    raw = json.dumps({"observations": [
+        {"type": "meal", "text": "nasi goreng", "at": "19:30"}, {"type": "mood", "text": "capek", "mood": 2},
+        {"type": "like", "text": "kopi", "mood": 5}, {"type": "Skin Care!", "text": "serum"}, {"type": "meal", "text": "sate", "at": "25:99"}]})
+    got = mem.parse_observations(raw)
+    assert [(o["type"], o["at"], o["mood"]) for o in got] == [("meal", "19:30", None), ("mood", "", 2), ("like", "", None), ("skincare", "", None), ("meal", "", None)]
+    assert mem.parse_observations("not json") == [] and mem.parse_observations('{"summary": "x"}') == []

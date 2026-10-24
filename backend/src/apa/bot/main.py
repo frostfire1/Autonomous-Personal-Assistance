@@ -5,6 +5,7 @@ Plain text is stored as an event and parsed in the worker; the bot itself never 
 """
 
 import asyncio
+from datetime import datetime
 from zoneinfo import ZoneInfo
 
 from aiogram import Bot, Dispatcher, F
@@ -93,6 +94,27 @@ async def _quietly(coro) -> None:
         log.warning("private_handler_failed", error=type(e).__name__)
 
 
+async def _diary(message: Message) -> None:
+    """`/diary <text>`: one entry in the owner's private journal. It is saved straight to the encrypted store (it never goes to
+    the event store, the queue, the chat history or any AI) and the owner's message is deleted from the chat. The reply does
+    not repeat the text."""
+    from apa import assistant_memory
+    from apa.core.secrets import SecretsUnavailable
+
+    text = message.text.strip().split(None, 1)[1].strip() if len(message.text.split(None, 1)) > 1 else ""
+    if not text:
+        await message.answer("Write /diary followed by your entry. It is saved encrypted, never shown to any AI, and I delete your "
+                             "message from this chat. The Diary page in the dashboard is more private still.")
+        return
+    try:
+        await assistant_memory.journal_add(SessionLocal, datetime.now(_tz()).date(), text, shared=False)
+    except SecretsUnavailable:
+        await message.answer("The diary is off: the server has no SECRETS_KEY, so nothing can be stored safely. Your message was not saved.")
+        return
+    await _quietly(message.delete())  # Telegram keeps what was typed unless it is deleted
+    await message.answer("✅ Saved to your private diary (encrypted, not shared with the AI).")
+
+
 @dp.message(F.func(_owner_only), F.text.startswith("/"))
 async def command(message: Message, arq: ArqRedis, private: PrivateManager) -> None:
     word = message.text.strip().lower().split()[0].split("@")[0]
@@ -102,6 +124,9 @@ async def command(message: Message, arq: ArqRedis, private: PrivateManager) -> N
     if word in ("/selesai", "/endprivate"):
         private.track(message.chat.id, message.message_id)
         await _quietly(private.end(message.chat.id, "owner"))
+        return
+    if word in ("/diary", "/jurnal"):
+        await _quietly(_diary(message))  # a failure must not reach aiogram's error log: it would print the diary text
         return
     key = menu_key(message.text)
     if key is not None:  # /start /menu /hari_ini ...: an interactive view

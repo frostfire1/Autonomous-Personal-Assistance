@@ -43,6 +43,12 @@ SYSTEM = (
     "two\", \"it\", \"2 2nya\"). A message that only says what a recent payment was or who it was for is about those payments.\n"
     "You cannot change anything yourself. To record, edit, undo or set a budget, call the matching write tool: it shows the "
     "owner a confirmation card and nothing happens until they confirm. Never claim something was recorded or changed.\n"
+    "You know the owner like a close friend: when it helps, use WHAT YOUR DATA SAYS (their sleep, when they are active, what they "
+    "eat and when, spending, steps, interests) to give practical, caring advice, quoting the figure it rests on; if a trait is "
+    "missing or thin, say you do not have enough data yet rather than guessing. Suggest, never lecture; one or two ideas at most.\n"
+    "The owner has a PRIVATE diary you cannot read. If they start writing a diary entry or a very personal confidence in this "
+    "chat, tell them to use /diary (Telegram) or the Diary page in the dashboard so it stays encrypted and is never sent to an "
+    "AI; chat messages are not private in that way.\n"
     "If the message is unclear or a needed detail is missing, ask ONE short question instead of guessing or refusing.\n"
     "When the owner asks you to remember something about them (a preference, a person, a habit), call remember. Never store "
     "passwords, keys, PINs or card or account numbers. When they ask you to forget something, call forget with its number "
@@ -82,16 +88,22 @@ async def _context(sm, tz: ZoneInfo, now: datetime, history_block: str, reply_to
         if tm is not None:
             replied = f"The owner is replying to this earlier message of yours: «{(tm.body or '')[:300]}»" + (
                 f" (about transaction #{tm.transaction_id})" if tm.transaction_id else "") + "\n"
+    from apa import profile
+
+    traits_block = await profile.block(sm)
+    profile_block = f"WHAT YOUR DATA SAYS ABOUT THE OWNER (computed, trustworthy; use it for advice):\n{traits_block}\n" if traits_block else ""
     diary = (await assistant_memory.episodes(sm))[-7:]
     diary_block = ("YOUR DIARY (summaries of earlier days; use the recall look-up for details):\n" + "\n".join(
         f"{e['date']}: {e['summary']}" for e in diary)[-1500:] + "\n") if diary else ""
     items = (await assistant_memory.learned(sm))[-25:]
     learned_block = ("WHAT YOU HAVE LEARNED about the owner from past chats (may be out of date):\n" + "\n".join(
         f"- [{i['kind']}] {i['text']}" for i in items)[-1500:] + "\n") if items else ""
+    shared = await assistant_memory.shared_journal(sm, 5)
+    shared_block = ("DIARY ENTRIES THE OWNER CHOSE TO SHARE WITH YOU:\n" + "\n".join(f"{e['date']}: {e['text']}" for e in shared)[-1500:] + "\n") if shared else ""
     notes = await assistant_memory.load(sm)
     remembered = ("WHAT YOU REMEMBER about the owner (their own notes):\n" + "\n".join(f"{i}. {n}" for i, n in enumerate(notes, 1)) + "\n") if notes else ""
     return (
-        f"Now: {now:%A %d/%m/%Y %H:%M} ({tz})\n{remembered}{learned_block}{diary_block}{replied}Recent chat:\n{history_block}\n\n<DATA>\n{facts[:CONTEXT_CHARS]}\n</DATA>"
+        f"Now: {now:%A %d/%m/%Y %H:%M} ({tz})\n{profile_block}{remembered}{learned_block}{shared_block}{diary_block}{replied}Recent chat:\n{history_block}\n\n<DATA>\n{facts[:CONTEXT_CHARS]}\n</DATA>"
     )
 
 

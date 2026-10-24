@@ -75,6 +75,7 @@ READ_TOOLS: dict[str, type[_A]] = {
     "cve": LimitQ,
     "news": NewsQ,
     "recall": RecallQ,
+    "profile": NoArgs,
 }
 
 # what the model is told about the read tools (the write tools are described by chat.actions.TOOL_SPEC)
@@ -86,7 +87,8 @@ READ_TOOL_DOC = """Look-up tools (read only; call one, you get the result, then 
 - sleep {"days": 1-30 (7)}
 - cve {"limit": 1-10 (5)}  the newest high or critical vulnerabilities with the technology and versions
 - news {"topic": "nasional"|"cyber"|a topic id (nasional), "limit": 1-10 (5)}
-- recall {"query": string? (a word or phrase), "days": 1-365 (30), "limit": 1-15 (8)}  search your diary and the chat history of earlier days"""
+- recall {"query": string? (a word or phrase), "days": 1-365 (30), "limit": 1-15 (8)}  search your diary, what you learned and the chat history of earlier days
+- profile {}  the owner's patterns computed from their data: sleep, when they are active, what and when they eat, spending, steps, stress, interests"""
 
 
 def _clip(text: str) -> str:
@@ -218,8 +220,10 @@ async def _recall(sm, tz, now, a: RecallQ) -> str:
         key=lambda x: x[0], reverse=True,
     )[: a.limit]
     diary = (await assistant_memory.search_diary(sm, a.query, a.days))[-5:]
-    q = (a.query or "").lower()
-    known = [i for i in await assistant_memory.learned(sm) if not q or q in i["text"].lower()][-8:]
+    if a.query:  # full-text search over everything remembered (notes, learned items, diary), best match first
+        known = [i for i in await assistant_memory.search_items(sm, a.query, 8) if i["kind"] not in ("diary", "note")]
+    else:
+        known = (await assistant_memory.learned(sm))[-8:]
     parts = []
     if known:
         parts.append("LEARNED:\n" + "\n".join(f"- [{i['kind']}] {i['text']} ({i.get('date', '?')})" for i in known))
@@ -230,8 +234,18 @@ async def _recall(sm, tz, now, a: RecallQ) -> str:
     return "\n".join(parts) or "Nothing found in the diary or the chat history."
 
 
+async def _profile(sm, tz, now, a: NoArgs) -> str:
+    from apa import profile
+
+    rows = await profile.traits(sm)
+    if not rows:
+        return "No profile yet: it is computed each night from your data (and needs at least 5 days of each kind)."
+    return "\n".join(f"- {r['summary']} ({r['evidence']} observations)" for r in rows)
+
+
 _RUN = {
     "recall": _recall,
+    "profile": _profile,
     "transactions": _transactions, "spending": _spending, "budgets": _budgets, "balances": _balances,
     "sleep": _sleep, "cve": _cve, "news": _news,
 }

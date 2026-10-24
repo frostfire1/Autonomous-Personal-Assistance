@@ -6,6 +6,7 @@ is audited in the hash chain."""
 
 import json
 import os
+from datetime import UTC
 from decimal import Decimal
 
 import pytest
@@ -442,7 +443,7 @@ async def test_the_diary_is_written_from_the_days_chat_and_the_assistant_can_rec
     assert await mem.delete_learned(stack, 1) and len(await mem.learned(stack)) == 1 and not await mem.delete_learned(stack, 9)
     assert await mem.delete_episode(stack, now.date().isoformat()) and await mem.episodes(stack) == []
     export = await mem.export_all(stack)
-    assert set(export) == {"notes", "learned", "diary"}
+    assert set(export) == {"notes", "learned", "diary", "journal"}
 
 
 async def test_a_day_with_almost_no_chat_writes_no_diary_entry(stack):
@@ -457,3 +458,182 @@ async def test_a_day_with_almost_no_chat_writes_no_diary_entry(stack):
             raise AssertionError("the model must not be asked about a day with one line of chat")
 
     assert await mem.summarize_day(stack, Llm(), datetime.now(TZ).date(), TZ) is None and await mem.episodes(stack) == []
+
+
+async def test_the_profile_is_computed_stored_searched_and_pruned(stack):
+    from datetime import datetime, timedelta
+
+    from apa import assistant_memory as mem
+    from apa import profile
+    from apa.chat.tools import run_read
+    from apa.db.models.health import SleepSession
+
+    now = datetime.now(TZ)
+    async with stack() as s:
+        for d in range(1, 9):
+            s.add(SleepSession(sleep_date=(now - timedelta(days=d)).date(), total_sleep_mins=330 + d * 5, sleep_score=70))
+        await s.commit()
+    done = await profile.refresh(stack, TZ, now)
+    assert [t.key for t in done] == ["sleep.duration"]  # only what has enough data behind it
+    stored = await profile.traits(stack)
+    assert stored[0]["key"] == "sleep.duration" and stored[0]["evidence"] == 8 and "Sleep over 8 nights" in stored[0]["summary"]
+    assert "Sleep over 8 nights" in await profile.block(stack)
+    assert "8 observations" in await run_read(stack, TZ, now, "profile", {})
+    # a trait that no longer has enough data is removed on the next run
+    async with stack() as s:
+        from sqlalchemy import delete
+
+        await s.execute(delete(SleepSession))
+        await s.commit()
+    await profile.refresh(stack, TZ, now)
+    assert await profile.traits(stack) == [] and "No profile yet" in await run_read(stack, TZ, now, "profile", {})
+
+    # full-text search over everything remembered: best match first, partial words still found
+    await mem.remember(stack, "Saya suka kopi tanpa gula")
+    await mem.add_learned(stack, now.date(), [{"kind": "preference", "text": "Tidak suka makanan pedas"}, {"kind": "goal", "text": "Ingin lari 5 km"}])
+    hits = await mem.search_items(stack, "kopi gula")
+    assert hits and hits[0]["text"] == "Saya suka kopi tanpa gula"
+    assert [h["text"] for h in await mem.search_items(stack, "pedas")] == ["Tidak suka makanan pedas"]
+    assert [h["text"] for h in await mem.search_items(stack, "peda")] == ["Tidak suka makanan pedas"]  # a partial word: substring fallback
+    assert await mem.search_items(stack, "   ") == [] and await mem.search_items(stack, "zzzxxx") == []
+
+
+async def test_everything_remembered_is_encrypted_in_the_database_and_nothing_is_stored_without_a_key(stack, monkeypatch):
+    from datetime import date
+
+    from sqlalchemy import text
+
+    from apa import assistant_memory as mem
+    from apa.core.secrets import SecretsUnavailable
+    from apa.core.settings import get_settings
+
+    secret = "aku takut gagal dan malu cerita ke siapa pun"
+    await mem.remember(stack, "kode rahasia kucing biru")
+    await mem.journal_add(stack, date.today(), secret)
+    await mem.add_episode(stack, date.today(), "ringkasan harian yang sensitif")
+    async with stack() as s:
+        rows = (await s.execute(text("select kind, text, enc from memory_items"))).all()
+    assert {r[0] for r in rows} == {"note", "journal", "diary"} and all(r[2] for r in rows)
+    blob = " ".join(r[1] for r in rows)
+    assert "takut" not in blob and "kucing" not in blob and "sensitif" not in blob  # a dump of the table shows nothing readable
+    assert (await mem.load(stack)) == ["kode rahasia kucing biru"] and (await mem.journal_list(stack))[0]["text"] == secret
+
+    # a different key cannot read it, and says so instead of showing ciphertext
+    from cryptography.fernet import Fernet
+
+    monkeypatch.setenv("SECRETS_KEY", Fernet.generate_key().decode())
+    get_settings.cache_clear()
+    assert (await mem.load(stack)) == [mem.UNREADABLE] and (await mem.journal_list(stack))[0]["text"] == mem.UNREADABLE
+
+    # no key: nothing is written, never a plaintext fallback
+    monkeypatch.setenv("SECRETS_KEY", "")
+    get_settings.cache_clear()
+    assert "SECRETS_KEY" in await mem.remember(stack, "tidak boleh tersimpan")
+    with pytest.raises(SecretsUnavailable):
+        await mem.journal_add(stack, date.today(), "tidak boleh tersimpan juga")
+    async with stack() as s:
+        assert (await s.execute(text("select count(*) from memory_items"))).scalar_one() == 3
+
+
+async def test_a_private_journal_entry_never_reaches_the_assistant_until_the_owner_shares_it(stack):
+    from datetime import date, datetime
+
+    from apa import assistant_memory as mem
+    from apa.chat.tools import run_read
+
+    now = datetime.now(TZ)
+    secret = "rencana kejutan ulang tahun istriku dan nomor 0812 3456 7890"
+    entry = await mem.journal_add(stack, date.today(), secret)  # private by default
+    assert (await mem.journal_list(stack))[0]["shared"] is False
+    assert await mem.shared_journal(stack) == [] and await mem.search_items(stack, "kejutan") == []
+    assert "Nothing found" in await run_read(stack, TZ, now, "recall", {"query": "kejutan"})
+    assert "kejutan" not in (await mem.export_all(stack))["notes"].__str__() and (await mem.export_all(stack))["journal"][0]["text"] == secret
+
+    assert await mem.journal_set_shared(stack, entry, True)  # the owner opts in: only now may the assistant read it, numbers scrubbed
+    shared = await mem.shared_journal(stack)
+    assert len(shared) == 1 and "kejutan" in shared[0]["text"] and "0812" not in shared[0]["text"] and "[number]" in shared[0]["text"]
+    assert [h["kind"] for h in await mem.search_items(stack, "kejutan")] == ["journal"]
+    assert "kejutan" in await run_read(stack, TZ, now, "recall", {"query": "kejutan"})
+
+    assert await mem.journal_set_shared(stack, entry, False) and await mem.shared_journal(stack) == []  # and takes it back
+    assert await mem.journal_delete(stack, entry) and await mem.journal_list(stack) == [] and not await mem.journal_delete(stack, entry)
+    assert not await mem.journal_set_shared(stack, 999, True)
+
+
+async def test_rows_from_the_older_plaintext_storage_are_encrypted_on_first_sight(stack):
+    from sqlalchemy import text
+
+    from apa import assistant_memory as mem
+
+    async with stack() as s:
+        await s.execute(text("insert into memory_items (kind, text, source) values ('note', 'catatan lama polos', 'owner')"))
+        await s.commit()
+    assert await mem.load(stack) == ["catatan lama polos"]  # readable before
+    assert await mem.encrypt_legacy(stack) == 1 and await mem.encrypt_legacy(stack) == 0
+    async with stack() as s:
+        raw, enc = (await s.execute(text("select text, enc from memory_items"))).one()
+    assert enc and "polos" not in raw and await mem.load(stack) == ["catatan lama polos"]
+
+
+async def test_observations_are_stored_encrypted_replaced_per_day_and_not_shown_as_learned(stack):
+    from datetime import date
+
+    from sqlalchemy import text
+
+    from apa import assistant_memory as mem
+
+    today = date.today()
+    obs = [{"type": "meal", "text": "nasi goreng", "at": "19:30", "mood": None}, {"type": "mood", "text": "capek", "at": "", "mood": 2}]
+    assert await mem.add_observations(stack, today, obs) == 2
+    assert await mem.add_observations(stack, today, obs[:1]) == 1  # the day is rewritten, not doubled
+    got = await mem.observations(stack, 5, today)
+    assert [(o["type"], o["text"], o["date"]) for o in got] == [("meal", "nasi goreng", today)]
+    async with stack() as s:
+        raw = (await s.execute(text("select text, enc, shared from memory_items where kind = 'obs'"))).one()
+    assert raw[1] and not raw[2] and "nasi" not in raw[0]  # encrypted, and never offered to search
+    assert await mem.learned(stack) == [] and await mem.search_items(stack, "nasi") == []
+
+
+async def test_usage_is_replaced_per_device_and_day_and_summarised(stack):
+    from datetime import date, datetime
+
+    from apa import usage
+
+    day = date(2026, 3, 2)
+    t0 = datetime(2026, 3, 2, 1, 0, tzinfo=UTC)
+    assert await usage.store(stack, "pc", "desktop", day, [{"app": "Code", "seconds": 600, "first_at": t0}, {"app": "Code", "seconds": 60}, {"app": "Chrome", "seconds": 30}]) == 2
+    assert await usage.store(stack, "phone", "android", day, [{"app": "YouTube", "seconds": 900}]) == 1
+    assert await usage.store(stack, "pc", "desktop", day, [{"app": "Code", "seconds": 100}]) == 1  # a re-push replaces that device's day only
+    rows = {(r.device, r.app): r.seconds for r in await usage.recent(stack, 30, date(2026, 3, 3))}
+    assert rows == {("pc", "Code"): 100, ("phone", "YouTube"): 900}
+
+
+async def test_old_chat_text_is_erased_once_the_day_is_in_the_diary_but_payments_and_undigested_days_stay(stack):
+    from datetime import datetime, timedelta
+
+    from sqlalchemy import select
+
+    from apa import assistant_memory as mem
+    from apa import retention
+
+    now = datetime.now(TZ)
+    old, older = now - timedelta(days=20), now - timedelta(days=21)
+    async with stack() as s:
+        for i, (when, status, text) in enumerate([(old, "skipped", "cerita lama"), (old, "committed", "kopi 25rb"),
+                                                  (older, "skipped", "belum diringkas satu"), (older, "skipped", "belum diringkas dua"),
+                                                  (now, "skipped", "cerita baru")]):
+            s.add(InboundEvent(idempotency_key=f"ret-{i}", source="telegram_shorthand", payload={"text": text}, status=status, received_at=when))
+        s.add(TelegramMessage(direction="out", chat_id=1, kind="reply", body="balasan lama", created_at=old))
+        s.add(TelegramMessage(direction="out", chat_id=1, kind="reply", body="balasan baru", created_at=now))
+        await s.commit()
+    await mem.add_episode(stack, old.date(), "Ringkasan hari itu.")  # `old` is in the diary; `older` has two messages and no entry
+    assert (await retention.prune(stack, TZ, now, 0))["events"] == 0  # 0 days = keep for ever
+    out = await retention.prune(stack, TZ, now, 7)
+    assert out["events"] == 1 and out["replies"] == 1 and out["kept_for_diary"] == 1
+    async with stack() as s:
+        events = {e.idempotency_key: e.payload for e in (await s.execute(select(InboundEvent))).scalars()}
+        bodies = [m.body for m in (await s.execute(select(TelegramMessage).order_by(TelegramMessage.id))).scalars()]
+    assert events["ret-0"] == {"text_pruned": True}  # chat of a digested day: the text is gone
+    assert events["ret-1"]["text"] == "kopi 25rb"  # a payment keeps its text (audit)
+    assert events["ret-2"]["text"] == "belum diringkas satu" and events["ret-4"]["text"] == "cerita baru"
+    assert bodies == [None, "balasan baru"]

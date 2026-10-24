@@ -2,6 +2,7 @@ import hashlib
 import hmac
 import secrets
 import time
+from datetime import date, datetime
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
 from pydantic import BaseModel, Field
@@ -92,6 +93,31 @@ async def heartbeat(body: HeartbeatIn, request: Request) -> dict[str, object]:
         ex=14 * 86400,
     )
     return {"ok": True}
+
+
+class UsageApp(BaseModel):
+    app: str = Field(min_length=1, max_length=120)
+    seconds: int = Field(gt=0, le=86400)
+    first_at: datetime | None = None
+    last_at: datetime | None = None
+
+
+class UsageIn(BaseModel):
+    device: str = Field(min_length=1, max_length=40)
+    kind: str = Field(default="other", max_length=12)  # android | desktop | ios | web | other
+    day: date
+    apps: list[UsageApp] = Field(max_length=300)
+
+
+@router.post("/usage", dependencies=[Depends(require_ingest_key)])
+async def ingest_usage(body: UsageIn) -> dict[str, object]:
+    """A device's active time per app for one day (from ActivityWatch). Replaces what that device sent for that day, so a
+    re-push is harmless. Only app names and seconds are kept: no window titles, no URLs."""
+    from apa import usage
+    from apa.core.db import SessionLocal
+
+    kept = await usage.store(SessionLocal, body.device, body.kind, body.day, [a.model_dump() for a in body.apps])
+    return {"ok": True, "apps": kept}
 
 
 @router.post(

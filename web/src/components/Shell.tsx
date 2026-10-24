@@ -13,6 +13,7 @@ const PANELS = [
   ["/health", "Health"],
   ["/security", "Security"],
   ["/logs", "Conversations"],
+  ["/diary", "Diary"],
   ["/setup", "Get started"],
   ["/models", "AI Models"],
   ["/news", "News and CVEs"],

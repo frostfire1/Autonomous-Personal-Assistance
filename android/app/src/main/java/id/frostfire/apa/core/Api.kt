@@ -72,6 +72,9 @@ class Api(private val cfg: Config) {
         return call(builder("/ingest/heartbeat").post(body.toString().toRequestBody(JSON)).build())
     }
 
+    /** One day of app usage from the ActivityWatch app on this phone: app names and seconds only. */
+    suspend fun putUsage(body: JSONObject): Result = call(builder("/ingest/usage").post(body.toString().toRequestBody(JSON)).build())
+
     suspend fun getPrefs(): Result = call(builder("/prefs").get().build())
 
     suspend fun putPrefs(body: JSONObject): Result = call(builder("/prefs").put(body.toString().toRequestBody(JSON)).build())

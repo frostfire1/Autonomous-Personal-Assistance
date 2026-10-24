@@ -132,6 +132,7 @@ async def get_memory() -> dict:
     """What the assistant has been asked to remember about the owner."""
     from apa import assistant_memory
 
+    await assistant_memory.encrypt_legacy(SessionLocal)  # rows from the older plaintext storage are encrypted on first sight
     return {"facts": await assistant_memory.load(SessionLocal), "diary": await assistant_memory.episodes(SessionLocal),
             "learned": await assistant_memory.learned(SessionLocal)}
 
@@ -150,12 +151,124 @@ async def delete_learned_item(index: int) -> dict:
     return {"deleted": await assistant_memory.delete_learned(SessionLocal, index)}
 
 
+class JournalIn(BaseModel):
+    text: str
+    shared: bool = False  # private unless the owner says the assistant may read it
+    day: str | None = None
+
+
+class ShareIn(BaseModel):
+    shared: bool
+
+
+@router.get("/journal")
+async def list_journal(limit: int = 50, offset: int = 0) -> dict:
+    """The owner's private journal, decrypted. Owner only; it never reaches the AI unless an entry was marked shared."""
+    from apa import assistant_memory
+
+    return {"entries": await assistant_memory.journal_list(SessionLocal, min(max(limit, 1), 200), max(offset, 0))}
+
+
+@router.post("/journal")
+async def add_journal(body: JournalIn) -> dict:
+    from datetime import date, datetime
+    from zoneinfo import ZoneInfo
+
+    from apa import assistant_memory
+    from apa.core.secrets import SecretsUnavailable
+
+    try:
+        day = date.fromisoformat(body.day) if body.day else datetime.now(ZoneInfo(get_settings().timezone)).date()
+    except ValueError:
+        raise HTTPException(422, "day must be YYYY-MM-DD") from None
+    if not body.text.strip():
+        raise HTTPException(422, "write something first")
+    try:
+        entry_id = await assistant_memory.journal_add(SessionLocal, day, body.text, shared=body.shared)
+    except SecretsUnavailable:
+        raise HTTPException(503, "the server has no valid SECRETS_KEY, so the diary cannot be stored safely") from None
+    return {"id": entry_id}
+
+
+@router.put("/journal/{entry_id}/share")
+async def share_journal(entry_id: int, body: ShareIn) -> dict:
+    from apa import assistant_memory
+
+    if not await assistant_memory.journal_set_shared(SessionLocal, entry_id, body.shared):
+        raise HTTPException(404, "no such entry")
+    return {"id": entry_id, "shared": body.shared}
+
+
+@router.delete("/journal/{entry_id}")
+async def delete_journal(entry_id: int) -> dict:
+    from apa import assistant_memory
+
+    return {"deleted": await assistant_memory.journal_delete(SessionLocal, entry_id)}
+
+
+@router.post("/memory/prune")
+async def prune_chat_now(request: Request) -> dict:
+    """Write any missing diary days, then erase chat text older than the retention window (it also runs every night)."""
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+
+    from apa import retention
+
+    tz = ZoneInfo(get_settings().timezone)
+    now = datetime.now(tz)
+    written = await retention.catch_up(SessionLocal, request.app.state.llm, tz, now.date())
+    pruned = await retention.prune(SessionLocal, tz, now, get_settings().chat_keep_days)
+    return {"diary_days_written": written, "keep_days": get_settings().chat_keep_days, **pruned}
+
+
+@router.get("/usage")
+async def usage_summary(days: int = 14) -> dict:
+    """Screen time per day and the most used apps over the last days, from the devices that report (ActivityWatch)."""
+    from collections import defaultdict
+
+    from apa import usage
+
+    days = max(1, min(days, 90))
+    rows = await usage.recent(SessionLocal, days)
+    per_day: dict[str, dict] = defaultdict(lambda: defaultdict(int))
+    apps: dict[str, int] = defaultdict(int)
+    devices: dict[str, str] = {}
+    for r in rows:
+        per_day[r.day.isoformat()][r.device] += r.seconds
+        apps[r.app] += r.seconds
+        devices[r.device] = r.kind
+    return {"devices": devices, "days": {d: dict(v) for d, v in sorted(per_day.items())},
+            "top_apps": sorted(({"app": a, "seconds": s, "category": usage.category(a)} for a, s in apps.items()),
+                               key=lambda x: -x["seconds"])[:15]}
+
+
+@router.get("/profile")
+async def get_profile() -> dict:
+    """The patterns computed from the owner's data (sleep, activity, food, spending, steps, stress, interests)."""
+    from apa import profile
+
+    return {"traits": await profile.traits(SessionLocal)}
+
+
+@router.post("/profile/refresh")
+async def refresh_profile() -> dict:
+    """Recompute the profile now (it also runs every night)."""
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+
+    from apa import profile
+
+    tz = ZoneInfo(get_settings().timezone)
+    done = await profile.refresh(SessionLocal, tz, datetime.now(tz))
+    return {"traits": [t.key for t in done], "all": await profile.traits(SessionLocal)}
+
+
 @router.get("/memory/export")
 async def export_memory() -> dict:
     """Everything the assistant keeps about the owner (notes, what it learned, the diary), as JSON."""
-    from apa import assistant_memory
+    from apa import assistant_memory, profile
 
-    return await assistant_memory.export_all(SessionLocal)
+    return {**await assistant_memory.export_all(SessionLocal), "profile": await profile.traits(SessionLocal)}
 
 
 @router.delete("/memory/diary/{day}")

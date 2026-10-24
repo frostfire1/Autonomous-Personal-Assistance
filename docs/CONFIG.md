@@ -121,7 +121,8 @@ Copy it to `config.yaml`, replace the models (or leave it and choose models in t
 | `NVD_API_KEY` | higher NVD rate limit | |
 | `PRICE_FEED_URL` | staple-price JSON feed | |
 | `SHEETS_CREDENTIALS_FILE`, `SHEETS_SPREADSHEET_ID` / `SHEETS_URL` | one-way Google Sheets mirror | |
-| `HUAWEI_CLIENT_ID`, `HUAWEI_CLIENT_SECRET`, `SECRETS_KEY` | Huawei Health Kit sync (untested live); token encryption key | |
+| `SECRETS_KEY` | **required**: encrypts the diary, the assistant's memory and stored tokens (`setup.sh` makes one). Back it up: without it they cannot be read | generated |
+| `HUAWEI_CLIENT_ID`, `HUAWEI_CLIENT_SECRET` | Huawei Health Kit sync (untested live) | |
 | `NOTIFICATION_LLM_PER_HOUR` | unrecognised bank notifications the model may read per hour | 30 |
 | `PHONE_SILENT_HOURS` | hours without a check-in from the phone app before Telegram says so | 2 |
 | `TZ` | timezone | `Asia/Jakarta` |

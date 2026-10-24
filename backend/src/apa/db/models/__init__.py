@@ -13,6 +13,7 @@ from apa.db.models.budget import (
     SavingsGoal,
 )
 from apa.db.models.evidence import EvidenceBundle, EvidenceFile
+from apa.db.models.intel import AppUsage, MemoryItem, ProfileTrait
 from apa.db.models.ledger import (
     AssetWarranty,
     CashWallet,
@@ -23,6 +24,9 @@ from apa.db.models.ledger import (
 from apa.db.models.ops import InboundEvent, OAuthToken, TelegramMessage
 
 __all__ = [
+    "AppUsage",
+    "MemoryItem",
+    "ProfileTrait",
     "AgentDebateTranscript",
     "AssetWarranty",
     "BudgetRebalanceLog",
