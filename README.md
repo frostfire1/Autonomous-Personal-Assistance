@@ -77,6 +77,15 @@ TEST_DATABASE_URL=postgresql+asyncpg://postgres:testpw@127.0.0.1:55432/apa_test 
 TEST_REDIS_URL=redis://127.0.0.1:56379/15 pytest tests/integration -v
 ```
 
+**Running the integration tests on the server** (no tunnel to drop, the database is next to the tests): copy `backend/tests`, `pyproject.toml`, `src`
+and `alembic*` into one folder on the server, then run them in the backend image against the throwaway Postgres and Redis:
+
+```bash
+podman run --rm --network host -v /opt/apa/testrun:/work:Z -w /work   -e TEST_DATABASE_URL=postgresql+asyncpg://postgres:testpw@127.0.0.1:55432/apa_test   -e TEST_REDIS_URL=redis://127.0.0.1:56379/15 localhost/apa-backend:latest   sh -c "pip install -q pytest pytest-asyncio pyyaml; python -m pytest tests/integration -q"
+```
+
+The folder needs `src/` and `alembic/` (some tests read the source and the migrations). Run one test run at a time: each wipes the test database.
+
 Use `127.0.0.1`, not `localhost` (arq's 1 s connect timeout trips when `localhost` resolves to IPv6 first). Web:
 `cd web && npm install && npx next build`. Android: see [docs/ANDROID.md](docs/ANDROID.md).
 

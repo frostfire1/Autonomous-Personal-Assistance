@@ -70,6 +70,7 @@ class UndoTransaction(_Args):
 
 class EditTransaction(_Args):
     tx_id: int = Field(gt=0)
+    extra_tx_ids: list[int] = Field(default_factory=list, max_length=5)  # the same change for these transactions too
     merchant: str | None = Field(default=None, min_length=1, max_length=80)
     category: str | None = Field(default=None, min_length=1, max_length=48)
     notes: str | None = Field(default=None, max_length=200)
@@ -78,6 +79,7 @@ class EditTransaction(_Args):
     def _something_changes(self):
         if self.merchant is None and self.category is None and self.notes is None:
             raise ValueError("nothing to change")
+        self.extra_tx_ids = [i for i in dict.fromkeys(self.extra_tx_ids) if i > 0 and i != self.tx_id]
         return self
 
 
@@ -104,7 +106,7 @@ INTERNAL_TOOLS: dict[str, type[_Args]] = {"record_batch": RecordBatch}  # built 
 TOOL_SPEC = """Tools (reply with exactly one):
 - add_transaction {"amount": number (rupiah), "merchant": string, "direction": "out"|"in", "wallet": "cash_wallet"|"gopay"|"ovo"|"dana"|"bank_bca"|... (optional), "note": string (optional)}
 - undo_transaction {"tx_id": number}  (delete = reverse a recorded transaction; use the #id from RECENT TRANSACTIONS)
-- edit_transaction {"tx_id": number, "merchant": string?, "category": string?, "notes": string?}
+- edit_transaction {"tx_id": number, "extra_tx_ids": [number]? (the SAME change for these other transactions: use it when the owner means several, e.g. "both" or "the last two"), "merchant": string?, "category": string?, "notes": string?}
 - set_budget {"category": string, "monthly_limit": number}
 If the request is unclear, or the transaction it refers to is not in the data, reply {"tool": "none", "say": "<one short question or explanation>"}.
 Output JSON only: {"tool": "<name>", "args": {...}} or {"tool": "none", "say": "..."}."""
@@ -178,6 +180,10 @@ async def describe(sm: async_sessionmaker, tool: str, a: _Args) -> str:
         )
     if isinstance(a, UndoTransaction):
         return f"Batalkan transaksi #{tx.id}: {label_of(tx)} (saldo dan anggaran dikembalikan)"
+    for other_id in a.extra_tx_ids:  # an edit of several transactions: every one must exist and be recorded
+        other = await _tx(sm, other_id)
+        if other is None or other.status != "committed":
+            raise Refused(f"Transaksi #{other_id} tidak ditemukan atau tidak berstatus tercatat, jadi tidak bisa diubah.")
     changes = []
     if a.merchant is not None:
         changes.append(f"nama → {a.merchant}")
@@ -188,6 +194,9 @@ async def describe(sm: async_sessionmaker, tool: str, a: _Args) -> str:
         changes.append(f"kategori → {cat}")
     if a.notes is not None:
         changes.append(f"catatan → «{a.notes}»")
+    if a.extra_tx_ids:
+        ids = ", ".join(f"#{i}" for i in [tx.id, *a.extra_tx_ids])
+        return f"Ubah {1 + len(a.extra_tx_ids)} transaksi ({ids}) sekaligus: " + ", ".join(changes)
     return f"Ubah transaksi #{tx.id} ({label_of(tx)}): " + ", ".join(changes)
 
 
@@ -321,6 +330,12 @@ async def _exec_undo(sm, redis, a: UndoTransaction, nonce: str, tz: ZoneInfo) ->
 
 
 async def _exec_edit(sm, redis, a: EditTransaction, nonce: str, tz: ZoneInfo) -> str:
+    """One confirmed edit, applied to the transaction (and to each extra one the owner named) in turn."""
+    results = [await _edit_one(sm, a, tx_id, tz) for tx_id in [a.tx_id, *a.extra_tx_ids]]
+    return results[0] if len(results) == 1 else "\n".join(results)
+
+
+async def _edit_one(sm, a: EditTransaction, tx_id: int, tz: ZoneInfo) -> str:
     cats = await _allowed_categories(sm)
     new_cat = canonicalize(a.category, cats) if a.category is not None else None
     if a.category is not None and new_cat is None:
@@ -328,10 +343,10 @@ async def _exec_edit(sm, redis, a: EditTransaction, nonce: str, tz: ZoneInfo) ->
     now = datetime.now(UTC)
     async with sm() as s:
         tx = (
-            await s.execute(select(Transaction).where(Transaction.id == a.tx_id).with_for_update())
+            await s.execute(select(Transaction).where(Transaction.id == tx_id).with_for_update())
         ).scalar_one_or_none()
         if tx is None or tx.status != "committed":
-            return "Transaksi tidak ditemukan atau tidak berstatus tercatat."
+            return f"Transaksi #{tx_id} tidak ditemukan atau tidak berstatus tercatat."
         expense = tx_kind(tx.direction, tx.execution_mode) == "expense"
         old_cat, old_merchant = tx.primary_category, tx.merchant
         changed: list[str] = []

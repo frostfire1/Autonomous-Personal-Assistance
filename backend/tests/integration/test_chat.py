@@ -367,3 +367,20 @@ async def test_a_new_transaction_over_the_single_transaction_ceiling_is_still_he
     await resolve(stack, redis, nonce_of(card), True, actor=OWNER, tz=TZ)
     (ev,) = await rows(stack, InboundEvent)
     assert await commit(stack, ev.id) == "quarantined"  # asking the AI does not bypass the safety rules
+
+
+async def test_one_confirmed_edit_can_name_several_recent_transactions_at_once(stack, redis):
+    a = await committed(stack, parsed(merchant=None, amount="20071"))
+    b = await committed(stack, parsed(merchant=None, amount="20071"))
+    call = {"tool": "edit_transaction", "args": {"tx_id": a.id, "extra_tx_ids": [b.id, b.id, 0], "merchant": "Kunci AI"}}
+    card = await propose(stack, redis, json.dumps(call))
+    assert "2 transaksi" in card and f"#{a.id}" in card and f"#{b.id}" in card and "nama → Kunci AI" in card
+    out = await resolve(stack, redis, nonce_of(card), True, actor=OWNER, tz=TZ)
+    assert out.count("Diubah") == 2
+    names = {t.id: t.merchant for t in await rows(stack, Transaction)}
+    assert names[a.id] == names[b.id] == "Kunci AI"
+    log = await rows(stack, ExplainabilityLog, ExplainabilityLog.decision_type == "edit")
+    assert len(log) == 2  # each change is audited on its own
+    # an extra id that is not a recorded transaction refuses the whole card: nothing is half-applied
+    bad = await propose(stack, redis, json.dumps({"tool": "edit_transaction", "args": {"tx_id": a.id, "extra_tx_ids": [999999], "merchant": "X"}}))
+    assert "/confirm_" not in bad and "999999" in bad
