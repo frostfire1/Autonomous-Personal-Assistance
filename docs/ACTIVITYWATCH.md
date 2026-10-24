@@ -9,7 +9,8 @@ uses that in its advice (profile trait `screen_time`, and your "when active" est
 ## Android
 
 1. Install ActivityWatch for Android and grant it the usage-access permission. Leave it installed.
-2. Nothing else: this app reads ActivityWatch on the phone (`127.0.0.1:5600`) and sends today and yesterday with every sync, at
+2. Newer ActivityWatch versions answer only with an API key: copy it from the ActivityWatch app's settings into this app's
+   settings (**ActivityWatch API key**) and save. This app reads ActivityWatch on the phone (`127.0.0.1:5600`) and sends today and yesterday with every sync, at
    most every 30 minutes. If ActivityWatch is not installed or not running, it does nothing.
 
 ## Desktop (Windows, macOS, Linux)
@@ -20,7 +21,7 @@ Run ActivityWatch with its window and AFK watchers (the AFK watcher keeps idle t
 python tools/aw_push.py --server http://YOUR-SERVER:8000 --key YOUR_INGEST_API_KEY
 ```
 
-Schedule it every 30 minutes (Task Scheduler, cron or a systemd timer). Add `--hmac SECRET` if the server uses
+Schedule it every 30 minutes (Task Scheduler, cron or a systemd timer). Add `--aw-key KEY` if your ActivityWatch server has an `api_key`, `--hmac SECRET` if the server uses
 `INGEST_HMAC_SECRET`, `--device NAME` to label the machine. Any other tool can push the same shape to `POST /ingest/usage`:
 `{"device": "...", "kind": "android|desktop|ios|web|other", "day": "YYYY-MM-DD", "apps": [{"app": "...", "seconds": 600}]}`;
 a push replaces that device's day.

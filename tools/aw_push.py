@@ -23,9 +23,12 @@ import urllib.request
 from datetime import datetime, timedelta
 
 
+AW_KEY = ""
+
+
 def call(url, *, method="GET", body=None, headers=None):
     data = None if body is None else json.dumps(body).encode()
-    req = urllib.request.Request(url, data=data, method=method, headers={"Content-Type": "application/json", **(headers or {})})
+    req = urllib.request.Request(url, data=data, method=method, headers={"Content-Type": "application/json", **({"Authorization": f"Bearer {AW_KEY}"} if AW_KEY else {}), **(headers or {})})
     with urllib.request.urlopen(req, timeout=30) as r:
         return json.loads(r.read() or b"null")
 
@@ -74,10 +77,13 @@ def main():
     p.add_argument("--key", default=os.environ.get("APA_KEY"))
     p.add_argument("--hmac", default=os.environ.get("APA_HMAC", ""))
     p.add_argument("--aw", default="http://localhost:5600")
+    p.add_argument("--aw-key", default=os.environ.get("AW_KEY", ""), help="ActivityWatch api_key, if its server needs one")
     p.add_argument("--device", default=socket.gethostname())
     p.add_argument("--kind", default="desktop")
     p.add_argument("--days", type=int, default=2)
     a = p.parse_args()
+    global AW_KEY
+    AW_KEY = a.aw_key
     if not (a.server and a.key):
         sys.exit("Give --server and --key (or APA_URL and APA_KEY).")
     buckets = call(f"{a.aw}/api/0/buckets/")

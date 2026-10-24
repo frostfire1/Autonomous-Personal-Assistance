@@ -21,6 +21,11 @@ class Config(context: Context) {
         get() = p.getString("hmac_enc", null)?.let { runCatching { KeystoreBox.decrypt(it) }.getOrNull() } ?: ""
         set(v) = p.edit().putString("hmac_enc", if (v.isBlank()) null else KeystoreBox.encrypt(v.trim())).apply()
 
+    /** The ActivityWatch app's own API key (its server on this phone answers only with it). Stored encrypted. */
+    var awKey: String
+        get() = p.getString("aw_key_enc", null)?.let { runCatching { KeystoreBox.decrypt(it) }.getOrNull() } ?: ""
+        set(v) = p.edit().putString("aw_key_enc", if (v.isBlank()) null else KeystoreBox.encrypt(v.trim())).apply()
+
     /** Banking and wallet apps the owner picked on top of the built-in list, stored as "package|label". */
     var pickedApps: Set<String>
         get() = p.getStringSet("picked_apps", emptySet()) ?: emptySet()

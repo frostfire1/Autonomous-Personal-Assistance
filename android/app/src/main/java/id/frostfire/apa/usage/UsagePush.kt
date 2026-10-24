@@ -24,8 +24,9 @@ object UsagePush {
 
     class Day(val apps: Map<String, Long>, val first: Pair<String, Instant>?, val last: Pair<String, Instant>?)
 
-    private fun get(path: String): String? = runCatching {
-        http.newCall(Request.Builder().url("$AW$path").build()).execute().use { if (it.isSuccessful) it.body?.string() else null }
+    private fun get(path: String, key: String): String? = runCatching {
+        val req = Request.Builder().url("$AW$path").apply { if (key.isNotBlank()) header("Authorization", "Bearer $key") }.build()
+        http.newCall(req).execute().use { if (it.isSuccessful) it.body?.string() else null }
     }.getOrNull()
 
     /** Seconds per app from the watcher's events of one day, plus the first and the last app used. Pure: tested without a phone. */
@@ -61,14 +62,14 @@ object UsagePush {
     suspend fun run(cfg: Config, api: Api) {
         val now = System.currentTimeMillis()
         if (now - cfg.usagePushedAt < EVERY_MS) return
-        val buckets = get("/buckets/")?.let { JSONObject(it) } ?: return  // ActivityWatch is not running here
+        val buckets = get("/buckets/", cfg.awKey)?.let { JSONObject(it) } ?: return  // ActivityWatch is not running here
         val bucket = buckets.keys().asSequence().firstOrNull { it.startsWith("aw-watcher-android") } ?: return
         val zone = ZoneId.systemDefault()
         val today = LocalDate.now(zone)
         for (day in listOf(today.minusDays(1), today)) {
             val start = day.atStartOfDay(zone).toInstant()
             val end = minOf(day.plusDays(1).atStartOfDay(zone).toInstant(), Instant.ofEpochMilli(now))
-            val body = get("/buckets/$bucket/events?start=$start&end=$end&limit=10000") ?: return
+            val body = get("/buckets/$bucket/events?start=$start&end=$end&limit=10000", cfg.awKey) ?: return
             val d = summarize(JSONArray(body))
             if (d.apps.isNotEmpty() && !api.putUsage(payload(day, d)).ok) return
         }

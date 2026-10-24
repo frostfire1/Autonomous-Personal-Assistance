@@ -111,11 +111,14 @@ class SettingsActivity : ComponentActivity() {
         val key = field("", if (cfg.apiKey.isBlank()) "paste key" else "saved (encrypted); fill in to replace")
         label("Signing secret (optional, same as INGEST_HMAC_SECRET on the server)")
         val hmac = field("", if (cfg.hmacSecret.isBlank()) "empty = not signed" else "saved (encrypted); fill in to replace")
+        label("ActivityWatch API key (optional: from the ActivityWatch app on this phone, to send your app usage)")
+        val aw = field("", if (cfg.awKey.isBlank()) "empty = no app usage sent" else "saved (encrypted); fill in to replace")
         button("Save server & test connection") {
             cfg.serverUrl = url.text.toString()
             if (key.text.isNotBlank()) cfg.apiKey = key.text.toString()
             if (hmac.text.isNotBlank()) cfg.hmacSecret = hmac.text.toString()
-            key.text.clear(); hmac.text.clear()
+            if (aw.text.isNotBlank()) cfg.awKey = aw.text.toString()
+            key.text.clear(); hmac.text.clear(); aw.text.clear()
             SyncWorker.schedulePeriodic(this); SyncWorker.enqueue(this)
             testConnection()
         }
@@ -129,6 +132,7 @@ class SettingsActivity : ComponentActivity() {
             cfg.serverUrl = url.text.toString()
             if (key.text.isNotBlank()) cfg.apiKey = key.text.toString()
             if (hmac.text.isNotBlank()) cfg.hmacSecret = hmac.text.toString()
+            if (aw.text.isNotBlank()) cfg.awKey = aw.text.toString()
             Regex("""(\d{1,2}):(\d{2})""").matchEntire(time.text.toString().trim())?.let {
                 cfg.wakeHour = it.groupValues[1].toInt(); cfg.wakeMinute = it.groupValues[2].toInt()
             }
