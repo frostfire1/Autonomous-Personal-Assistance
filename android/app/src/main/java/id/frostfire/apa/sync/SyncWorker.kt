@@ -18,6 +18,7 @@ import androidx.work.WorkerParameters
 import id.frostfire.apa.core.Api
 import id.frostfire.apa.core.Config
 import id.frostfire.apa.data.Outbox
+import id.frostfire.apa.usage.UsagePush
 import java.util.concurrent.TimeUnit
 
 /** Sends buffered notifications to POST /ingest/notification. Safe to run repeatedly: the key makes resends harmless. */
@@ -34,7 +35,7 @@ class SyncWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(ctx, 
             }.getOrNull() ?: "0.2.0"
             api.heartbeat(cfg.listenerUp, outbox.pendingCount(), version)
         }
-        runCatching { id.frostfire.apa.usage.UsagePush.run(cfg, api) }  // app usage from ActivityWatch, if it is installed
+        runCatching { UsagePush.run(cfg, api) }  // app usage from ActivityWatch, if it is installed
         for (row in outbox.pending()) {
             val r = try {
                 api.postNotification(row.key, row.pkg, row.title, row.text, row.postedAt)
