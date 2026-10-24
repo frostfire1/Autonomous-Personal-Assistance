@@ -1,0 +1,115 @@
+name: apa
+
+x-backend: &backend
+  build: { context: ../backend }
+  env_file: ../.env
+  environment:
+    TZ: ${TZ:-Asia/Jakarta}
+    DATABASE_URL: postgresql+asyncpg://${APP_DB_USER}:${APP_DB_PASSWORD}@postgres:5432/${POSTGRES_DB}
+    # Receipt photos. 'local' on the shared volume below works today; switch to 's3' (Garage, see .env.example) once an S3
+    # store is chosen (the minio/minio image is no longer pullable, see docs/decisions.md).
+    EVIDENCE_BACKEND: ${EVIDENCE_BACKEND:-local}
+    EVIDENCE_DIR: /data/evidence
+  volumes:
+    - evidence:/data/evidence
+  depends_on:
+    postgres: { condition: service_healthy }
+    redis: { condition: service_started }
+  restart: unless-stopped
+
+services:
+  postgres:
+    image: postgres:17
+    env_file: ../.env
+    environment: { TZ: "${TZ:-Asia/Jakarta}" }
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./postgres/01-roles.sh:/docker-entrypoint-initdb.d/01-roles.sh:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      retries: 10
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    # Persistence is on for arq. /private content must never be enqueued (docs/decisions.md D1).
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes: [redisdata:/data]
+    restart: unless-stopped
+
+  minio:
+    # NOTE: this image is no longer pullable (docker.io and quay.io both refuse it). Replace it with an
+    # S3-compatible store you have vetted before relying on EVIDENCE_BACKEND=minio or the WAL archive.
+    image: minio/minio
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ACCESS_KEY}
+      MINIO_ROOT_PASSWORD: ${MINIO_SECRET_KEY}
+    volumes: [miniodata:/data]
+    restart: unless-stopped
+
+  litellm:
+    image: ghcr.io/berriai/litellm:main-stable
+    command: ["--config", "/app/config.yaml", "--port", "4000"]
+    env_file: ../.env
+    volumes: ["./litellm/config.yaml:/app/config.yaml:ro"]
+    restart: unless-stopped
+
+  searxng:
+    image: searxng/searxng
+    restart: unless-stopped
+
+  changedetection:
+    image: ghcr.io/dgtlmoon/changedetection.io
+    volumes: [cddata:/datastore]
+    restart: unless-stopped
+
+  migrate:
+    build: { context: ../backend }
+    env_file: ../.env
+    environment:
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+    command: ["alembic", "upgrade", "head"]
+    depends_on:
+      postgres: { condition: service_healthy }
+    restart: "no"
+
+  api:
+    <<: *backend
+    command: ["uvicorn", "apa.gateway.main:app", "--host", "0.0.0.0", "--port", "8000"]
+    depends_on:
+      migrate: { condition: service_completed_successfully }
+      redis: { condition: service_started }
+
+  worker:
+    <<: *backend
+    command: ["arq", "apa.workers.settings.WorkerSettings"]
+    depends_on:
+      migrate: { condition: service_completed_successfully }
+      redis: { condition: service_started }
+
+  bot:
+    <<: *backend
+    command: ["python", "-m", "apa.bot.main"]
+    depends_on:
+      migrate: { condition: service_completed_successfully }
+      redis: { condition: service_started }
+
+  web:
+    build: { context: ../web }
+    environment:
+      API_INTERNAL_URL: http://api:8000
+    restart: unless-stopped
+
+  caddy:
+    image: caddy:2
+    env_file: ../.env
+    ports: ["443:443", "80:80"]
+    volumes:
+      - ./caddy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddydata:/data
+    depends_on: [api, web]
+    restart: unless-stopped
+
+volumes: { pgdata: {}, redisdata: {}, miniodata: {}, cddata: {}, caddydata: {}, evidence: {} }

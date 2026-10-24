@@ -1,0 +1,68 @@
+# A starting point for your OWN LiteLLM setup. Copy it to config.yaml and fill in the three values in .env:
+#
+#   MY_API_BASE=https://api.example.com/v1     any OpenAI-compatible address
+#   MY_API_KEY=sk-...                          its key
+#   (LITELLM_MASTER_KEY is already in .env)
+#
+# The six names below ("router-...") are the AI roles the system asks for. Point each at any model your provider offers; to
+# see which models it offers, use the dashboard (Model AI, "Ambil daftar model") or:
+#   curl -H "Authorization: Bearer $MY_API_KEY" $MY_API_BASE/models
+#
+# You do not have to edit this file to change models later: the web dashboard (Model AI) can give any role or agent its own
+# provider and model, or switch an agent off, without a restart. This file is only the default each role falls back to.
+# Everything here is a dummy example: the model names are placeholders, replace them with ones your provider lists.
+model_list:
+  - model_name: router-routine-classifier   # extraction, classification, debate, news, translation: cheap and fast
+    litellm_params: &mine
+      model: openai/small-fast-model         # <- replace
+      api_base: os.environ/MY_API_BASE
+      api_key: os.environ/MY_API_KEY
+  - model_name: router-vision-ocr            # receipts and payment slips: must read images
+    litellm_params:
+      <<: *mine
+      model: openai/vision-model             # <- replace with a model that accepts images
+      timeout: 60
+  - model_name: router-arbiter-persona       # the final decision of a debate
+    litellm_params:
+      <<: *mine
+      model: openai/strong-model             # <- replace
+  - model_name: router-mental-health         # /private sessions (what is said goes to this provider)
+    litellm_params:
+      <<: *mine
+      model: openai/warm-model               # <- replace
+  - model_name: router-macro-reasoning       # economy analysis
+    litellm_params:
+      <<: *mine
+      model: openai/strong-model             # <- replace
+  - model_name: router-deep-research         # background research agent, never interactive
+    litellm_params:
+      <<: *mine
+      model: openai/research-model           # <- replace
+      timeout: 60
+
+  # Optional: a second provider as a fallback, so one provider's rate limit or outage does not stop the system.
+  # - model_name: fallback-second
+  #   litellm_params:
+  #     model: openai/another-model
+  #     api_base: os.environ/SECOND_API_BASE
+  #     api_key: os.environ/SECOND_API_KEY
+
+router_settings:
+  routing_strategy: latency-based-routing
+  timeout: 22
+  num_retries: 0
+  allowed_fails: 1
+  allowed_fails_policy:
+    TimeoutErrorAllowedFails: 1
+  cooldown_time: 60
+  # fallbacks:
+  #   - router-routine-classifier: ["fallback-second"]
+
+# /private sessions pass through this proxy: it must never write what was said anywhere. Keep these as they are.
+litellm_settings:
+  turn_off_message_logging: true
+  redact_user_api_key_info: true
+
+general_settings:
+  master_key: os.environ/LITELLM_MASTER_KEY
+  store_prompts_in_spend_logs: false

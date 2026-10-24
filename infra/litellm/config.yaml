@@ -1,0 +1,146 @@
+# LiteLLM proxy. Two providers: kunciai.id is the PRIMARY, Osiris (ai.osiris-code.com) is the fallback.
+#
+# Why kunciai leads (measured 2026-10-24, same load on both, see docs/decisions.md):
+#   * 60 of 60 debate votes, ~4 s per debate, vs Osiris 29 of 30 at 6-9 s throttled to 24 rpm;
+#   * its deepseek-v4-flash works; Osiris's 502s (as does its qwen3.8-max) and 8 of its 18 allowed
+#     models are "not found";
+#   * rate limit ~60 requests/min (inferred from where 429s began) vs Osiris's stated 30;
+#   * vision is identical and faster (glm-5v-turbo: single receipt 4.4 s vs 6-7 s; 3-photo album 9.9 s vs 12 s),
+#     but it bills ~3x the tokens for the same image (2,961 vs 976), and its price is unknown to me.
+# Both providers rate-limit PER KEY, so a fallback on the other provider is the only kind that still works
+# when one key is throttled: the first hop of every chain is on the other provider.
+#
+# Capability is per provider, so every model is verified separately (tests/test_litellm_config.py pins it):
+#   kunciai : valid JSON  deepseek-v4-flash/-v4.1-flash/-v4-pro, glm-5.3, glm-5.2, qwen3.8-max/-flash
+#             fenced JSON glm-5v-turbo, kimi-k2.5 (the parser strips fences)
+#             502 / 503   glm-5.3-flash, kimi-k2.7, kimi-k3, deepseek-v4-flash-vision-exp
+#             reads images: glm-5v-turbo ONLY (kunciai's glm-5.3 answered "I can't see the receipt")
+#   Osiris  : valid JSON  glm-5.3, glm-5.2, deepseek-v4-pro, kimi-k2.7, kimi-k3
+#             502         deepseek-v4-flash, qwen3.8-max      not found: haiku-4.5, sonnet-4.5, qwen3.7-*, ...
+#             reads images: glm-5v-turbo, glm-5.3, glm-5.2, kimi-k2.5, kimi-k2.7, kimi-k3
+#
+# Fallback names must reference model_name entries, so every fallback model has its own entry.
+model_list:
+  # ---- primary routes (kunciai) ----
+  - model_name: router-routine-classifier  # debaters + text extraction; cheap workhorse
+    litellm_params: &kunci
+      model: openai/kunciai/deepseek-v4-flash
+      api_base: os.environ/KUNCI_API_BASE  # https://kunciai.id/v1 (set in .env)
+      api_key: os.environ/KUNCI_API_KEY
+  - model_name: router-vision-ocr  # receipts, EDC slips, statements
+    litellm_params:
+      <<: *kunci
+      model: openai/kunciai/glm-5v-turbo
+      timeout: 60  # reading 2-4 photos takes 10 s or more; the 22 s chat default would cut it short
+  # The blueprint wants a Claude model here; none is verified fast and stable on either provider.
+  - model_name: router-arbiter-persona
+    litellm_params:
+      <<: *kunci
+      model: openai/kunciai/glm-5.3
+  # PROVISIONAL stand-in for a clinical-empathy model: nobody has judged glm-5.2 for /private sessions,
+  # which are not implemented yet. Revisit before building A-06.
+  - model_name: router-mental-health
+    litellm_params:
+      <<: *kunci
+      model: openai/kunciai/glm-5.2
+  - model_name: router-macro-reasoning
+    litellm_params:
+      <<: *kunci
+      model: openai/kunciai/deepseek-v4-pro
+  - model_name: router-deep-research  # background only, never interactive
+    litellm_params:
+      <<: *kunci
+      model: openai/kunciai/qwen3.8-max
+
+  # ---- fallback targets: Osiris ----
+  - model_name: fallback-osiris-glm-5.3
+    litellm_params: &osiris
+      model: openai/glm-5.3
+      api_base: os.environ/OSIRIS_API_BASE  # https://ai.osiris-code.com/v1 (set in .env)
+      api_key: os.environ/OSIRIS_API_KEY
+  - model_name: fallback-osiris-glm-5.2
+    litellm_params:
+      <<: *osiris
+      model: openai/glm-5.2
+  - model_name: fallback-osiris-deepseek-v4-pro
+    litellm_params:
+      <<: *osiris
+      model: openai/deepseek-v4-pro
+  - model_name: fallback-osiris-kimi-k2.7
+    litellm_params:
+      <<: *osiris
+      model: openai/kimi-k2.7
+  - model_name: fallback-osiris-kimi-k3  # slow (ping ~16 s): research only, hence its own long timeout
+    litellm_params:
+      <<: *osiris
+      model: openai/kimi-k3
+      timeout: 60
+
+  # ---- fallback targets: kunciai (same provider as the primaries: for a model-specific outage) ----
+  - model_name: fallback-kunci-deepseek-v4.1-flash
+    litellm_params:
+      <<: *kunci
+      model: openai/kunciai/deepseek-v4.1-flash
+  - model_name: fallback-kunci-deepseek-v4-pro
+    litellm_params:
+      <<: *kunci
+      model: openai/kunciai/deepseek-v4-pro
+  - model_name: fallback-kunci-glm-5.3
+    litellm_params:
+      <<: *kunci
+      model: openai/kunciai/glm-5.3
+
+  # ---- vision fallbacks: Osiris only, because kunciai has just one model that reads images.
+  # Own entries so the longer timeout does not leak into the chat chains.
+  - model_name: fallback-vision-osiris-glm-5v-turbo
+    litellm_params:
+      <<: *osiris
+      model: openai/glm-5v-turbo
+      timeout: 60
+  - model_name: fallback-vision-osiris-glm-5.3
+    litellm_params:
+      <<: *osiris
+      model: openai/glm-5.3
+      timeout: 60
+  - model_name: fallback-vision-osiris-kimi-k2.5
+    litellm_params:
+      <<: *osiris
+      model: openai/kimi-k2.5
+      timeout: 60
+
+router_settings:
+  routing_strategy: latency-based-routing
+  # A stalled call must fall back fast: 3 of 60 live calls hung until the old 45 s timeout and cost a vote.
+  # Per attempt, so a chain of stalls is bounded by (hops x 22 s); the client waits longer than one
+  # stall plus one fallback (apa.integrations.llm.DEFAULT_TIMEOUT_S).
+  timeout: 22
+  # No retry of the same model: a stalled or erroring model is not likely to recover within seconds,
+  # the fallback IS the retry (on a different model or provider), and every retry spends from a per-key budget.
+  num_retries: 0
+  allowed_fails: 1  # after one failure a deployment is cooled down instead of hammered
+  # allowed_fails alone does NOT cool a model down after a timeout (measured against a stalling upstream:
+  # the stalled model was paid for, 22 s, on every call). This policy does: the first timeout is tolerated
+  # as a one-off, the second trips the cooldown, and later calls skip the model at once for cooldown_time.
+  allowed_fails_policy:
+    TimeoutErrorAllowedFails: 1
+  cooldown_time: 60
+  fallbacks:
+    # first hop is on the OTHER provider (a different key, a different rate limit), then a model-specific
+    # alternative on the primary provider, then a second Osiris model
+    - router-routine-classifier: ["fallback-osiris-glm-5.3", "fallback-kunci-deepseek-v4.1-flash", "fallback-osiris-glm-5.2"]
+    # every entry was verified to read an image on ITS OWN provider
+    - router-vision-ocr: ["fallback-vision-osiris-glm-5v-turbo", "fallback-vision-osiris-glm-5.3", "fallback-vision-osiris-kimi-k2.5"]
+    - router-arbiter-persona: ["fallback-osiris-glm-5.3", "fallback-kunci-deepseek-v4-pro", "fallback-osiris-deepseek-v4-pro"]
+    - router-mental-health: ["fallback-osiris-glm-5.2", "fallback-kunci-glm-5.3", "fallback-osiris-kimi-k2.7"]
+    - router-macro-reasoning: ["fallback-osiris-deepseek-v4-pro", "fallback-kunci-glm-5.3", "fallback-osiris-glm-5.3"]
+    - router-deep-research: ["fallback-osiris-kimi-k3", "fallback-kunci-deepseek-v4-pro", "fallback-osiris-deepseek-v4-pro"]
+
+# /private sessions pass through this proxy to the model provider. The proxy must never write what was said anywhere:
+# no message or response text in its logs or callbacks, and no database behind it (no DATABASE_URL is given to it).
+litellm_settings:
+  turn_off_message_logging: true
+  redact_user_api_key_info: true
+
+general_settings:
+  master_key: os.environ/LITELLM_MASTER_KEY
+  store_prompts_in_spend_logs: false

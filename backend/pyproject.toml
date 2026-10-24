@@ -1,0 +1,91 @@
+[project]
+name = "apa"
+version = "0.1.0"
+description = "Autonomous Personal Assistance backend (blueprint v4.1)"
+requires-python = ">=3.12"
+dependencies = [
+  "fastapi>=0.115",
+  "uvicorn[standard]>=0.32",
+  "sqlalchemy[asyncio]>=2.0.36",
+  "asyncpg>=0.30",
+  "alembic>=1.14",
+  "pydantic>=2.10",
+  "pydantic-settings>=2.6",
+  "arq>=0.26",
+  "redis>=5.2",
+  "aiogram>=3.15",
+  "httpx>=0.27",
+  "structlog>=24.4",
+  "gspread>=6.1",
+  "defusedxml>=0.7",
+  "cryptography>=43",
+  "pypdfium2>=4.30",
+  "pillow>=10",
+  "minio>=7.2",
+  "edge-tts>=7.2",
+  "tzdata",
+]
+
+[project.optional-dependencies]
+# Heavy or native deps kept out of the base install
+voice = ["faster-whisper>=1.1"]
+research = ["trafilatura>=2.0"]
+dev = ["pytest>=8", "pytest-asyncio>=0.24", "ruff>=0.8", "mypy>=1.13", "pyyaml>=6"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/apa"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 110
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
+ignore = ["B008"]  # FastAPI Depends() in defaults is the framework idiom
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["E501"]  # long literals and assertions read better unwrapped
+"scripts/**" = ["E501", "E402", "E701", "E702"]  # throwaway operator scripts
+"src/apa/chat/**" = ["E501"]  # LLM prompt prose and tool schemas read better unwrapped
+"src/apa/private_mode/**" = ["E501"]  # the session's user-facing and prompt text
+"src/apa/inspector/**" = ["E501"]  # text templates for Telegram
+"src/apa/pipeline/chat.py" = ["E501"]
+"src/apa/gateway/routers/setup.py" = ["E501"]
+"src/apa/storage_config.py" = ["E501"]
+"src/apa/news/config.py" = ["E501"]
+"src/apa/gateway/routers/news.py" = ["E501"]
+"src/apa/llm_config.py" = ["E501"]  # docstrings and owner-facing labels
+"src/apa/gateway/routers/llm.py" = ["E501"]
+"src/apa/integrations/llm.py" = ["E501"]
+"src/apa/agents/debate.py" = ["E501"]
+"src/apa/steward/**" = ["E501"]  # docstrings and owner-facing report text
+"src/apa/news/**" = ["E501"]  # keyword lists and spoken-text templates
+"src/apa/health/**" = ["E501"]  # owner-facing messages and estimate tables
+"src/apa/reconcile/**" = ["E501"]  # prompts and owner-facing text
+"src/apa/pipeline/reconcile.py" = ["E501"]  # owner-facing report text
+"src/apa/prices/**" = ["E501"]  # owner-facing text and long docstrings
+"src/apa/sheets/**" = ["E501"]
+"src/apa/tts/**" = ["E501"]
+"src/apa/news/i18n.py" = ["E501"]
+"src/apa/prefs.py" = ["E501"]
+"src/apa/weather.py" = ["E501"]
+"src/apa/news/daily.py" = ["E501"]
+"src/apa/gateway/routers/briefing.py" = ["E501"]
+"src/apa/news/briefing.py" = ["E501"]
+"src/apa/news/jobs.py" = ["E501"]
+"src/apa/news/telegram.py" = ["E501"]
+"src/apa/gateway/routers/prefs.py" = ["E501"]
+"src/apa/pipeline/extract.py" = ["E501"]
+"src/apa/gateway/routers/dashboard.py" = ["E501"]
+"src/apa/workers/settings.py" = ["E501"]
+"src/apa/ingestion/**" = ["E501"]
+"src/apa/gateway/routers/ingest.py" = ["E501"]
+"src/apa/gateway/routers/prices.py" = ["E501"]
