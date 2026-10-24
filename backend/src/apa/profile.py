@@ -181,6 +181,64 @@ def stress_trait(readings: list[tuple[datetime, int]], tz: ZoneInfo) -> Trait | 
     return Trait("health.stress", "; ".join(parts) + ".", len(readings), {"avg": round(mean(s for _, s in readings))})
 
 
+_ID = frozenset("yang dan atau tapi untuk dengan dari ini itu aku kamu saya dia kita bisa tidak nggak gak sudah belum juga mau akan karena kalau jadi apa kenapa gimana tadi nanti udah aja dong deh sih kok".split())
+_EN = frozenset("the and that this with have from your what when will would could about there they them then than just like you are was for not but".split())
+_SLANG = frozenset("gak nggak ga dong deh sih kok wkwk wkwkwk haha hehe bro gue lu yg udah aja banget btw tuh nih lah kan".split())
+_EMOJI = re.compile("[\U0001F300-\U0001FAFF\u2600-\u27BF]")
+_TOKEN = re.compile(r"[a-zA-Z']+")
+
+
+def style_trait(messages: list[str]) -> Trait | None:
+    """How the owner writes (language, length, casualness, emoji), so the assistant can write back the same way. Needs 15+ messages
+    of at least 3 words; pure counting."""
+    msgs = [m.strip() for m in messages if len(m.split()) >= 3]
+    if len(msgs) < 15:
+        return None
+    id_hits = en_hits = slang = emoji = 0
+    for m in msgs:
+        words = [w.lower() for w in _TOKEN.findall(m)]
+        id_hits += sum(w in _ID for w in words)
+        en_hits += sum(w in _EN for w in words)
+        slang += any(w in _SLANG for w in words)
+        emoji += bool(_EMOJI.search(m))
+    lang = "Indonesian" if id_hits >= en_hits else "English"
+    mixed = min(id_hits, en_hits) >= 0.4 * max(id_hits, en_hits, 1)
+    words_med = round(median(len(m.split()) for m in msgs))
+    casual = slang / len(msgs) >= 0.2
+    emoji_rate = emoji / len(msgs)
+    text = (f"Writes in {lang}{' mixed with English' if mixed else ''}, {'casual' if casual else 'fairly plain'}, "
+            f"about {words_med} words a message, {'often' if emoji_rate >= 0.3 else 'sometimes' if emoji_rate >= 0.08 else 'rarely'} with emoji.")
+    return Trait("style", text, len(msgs), {"lang": lang, "mixed": mixed, "words": words_med, "casual": casual, "emoji": round(emoji_rate, 2)})
+
+
+def hobby_trait(categories: list[tuple[str, float]], apps: list[str], topics: list[str]) -> Trait | None:
+    """What the owner spends free time on, from app time by kind (share 0-1), the busiest apps and the topics of what they watch."""
+    free = [(c, s) for c, s in categories if c in ("games", "video", "music", "social", "shopping") and s >= 0.08]
+    if not free and not topics:
+        return None
+    text = "Free time goes to " + (", ".join(f"{c} {round(100 * s)}%" for c, s in free[:4]) if free else "what they watch")
+    if apps:
+        text += f" (mostly {', '.join(apps[:3])})"
+    if topics:
+        text += "; watches " + ", ".join(topics[:4])
+    return Trait("hobbies", text + ".", len(free) + len(topics), {"categories": free, "apps": apps[:5], "topics": topics[:6]})
+
+
+async def style_guide(sm: async_sessionmaker) -> str:
+    """Lines telling the assistant how to write to this owner (from the `style` trait and the briefing language)."""
+    async with sm() as s:
+        d = (await s.execute(select(ProfileTrait.data).where(ProfileTrait.key == "style"))).scalar_one_or_none()
+    if not d:
+        return "Reply in the language the owner writes in, warmly and briefly."
+    lines = [f"- Write in {d['lang']}{' (the owner mixes in English; that is fine)' if d.get('mixed') else ''}.",
+             f"- Keep it about as long as the owner's messages: around {max(8, d['words'] * 2)} words, never more than a short paragraph.",
+             "- Tone: " + ("casual and friendly, the way a friend texts (no stiff or formal wording)." if d.get("casual")
+                          else "friendly but a little more careful and complete."),
+             "- Emoji: " + ("use them freely." if d.get("emoji", 0) >= 0.3 else "one now and then at most." if d.get("emoji", 0) >= 0.08
+                            else "do not use emoji.")]
+    return "\n".join(lines)
+
+
 def usage_trait(rows: list[tuple[date, str, str, str, int, datetime | None]], tz: ZoneInfo) -> Trait | None:
     """Screen time and app habits from ActivityWatch: rows are (day, device, kind, app, seconds, last_at)."""
     from apa import usage
@@ -311,6 +369,20 @@ def interest_trait(messages: list[str], keywords: list[str], learned_texts: list
 # ---- reading the data and storing the traits --------------------------------------------------------------------------------
 
 
+def _hobby_inputs(rows: list[Any]) -> tuple[list[tuple[str, float]], list[str]]:
+    from apa import usage
+
+    total = sum(r.seconds for r in rows) or 1
+    cats: Counter[str] = Counter()
+    apps: Counter[str] = Counter()
+    for r in rows:
+        cats[usage.category(r.app)] += r.seconds
+        apps[r.app] += r.seconds
+    skip = ("launcher", "peluncur", "systemui", "settings", "pengaturan")
+    return ([(c, s / total) for c, s in cats.most_common()],
+            [a for a, _ in apps.most_common(8) if not any(k in a.lower() for k in skip)][:4])
+
+
 async def compute(sm: async_sessionmaker, tz: ZoneInfo, now: datetime) -> list[Trait]:
     from apa import assistant_memory, prefs
 
@@ -343,6 +415,8 @@ async def compute(sm: async_sessionmaker, tz: ZoneInfo, now: datetime) -> list[T
 
     usage_rows = await usage_mod.recent(sm, 30, now.date())
     obs = await assistant_memory.observations(sm, 60, now.date())
+    async with sm() as s:
+        content = (await s.execute(select(ProfileTrait.data).where(ProfileTrait.key == "ai.content"))).scalar_one_or_none() or {}
     watch = await assistant_memory.watched(sm, 90, now.date())
     messages = [str(p.get("text", "")) for _, p in msg_rows]
     p = await prefs.load(sm)
@@ -361,6 +435,8 @@ async def compute(sm: async_sessionmaker, tz: ZoneInfo, now: datetime) -> list[T
         stress_trait([(t, int(sc)) for t, sc in stress], tz),
         interest_trait(messages, list(p.keywords), learned_texts, cat_totals.most_common()),
         usage_trait([(r.day, r.device, r.kind, r.app, r.seconds, r.last_at) for r in usage_rows], tz),
+        style_trait([m for m in messages]),
+        hobby_trait(*_hobby_inputs(usage_rows), [t["name"] for t in content.get("topics", []) if isinstance(t, dict) and t.get("name")]),
         mood_trait([(o["date"], o["mood"]) for o in obs if o.get("mood")], [(d, m or 0) for d, m, _ in sleeps]),
         likes_trait([(o["type"], o["text"]) for o in obs]),
         habits_trait([(o["type"], o["text"]) for o in obs]),
@@ -377,7 +453,7 @@ async def refresh(sm: async_sessionmaker, tz: ZoneInfo, now: datetime | None = N
             stmt = insert(ProfileTrait).values(key=t.key, summary=t.summary, data=t.data, evidence=t.evidence, computed_at=func.now())
             await s.execute(stmt.on_conflict_do_update(
                 index_elements=["key"], set_={"summary": t.summary, "data": t.data, "evidence": t.evidence, "computed_at": func.now()}))
-        await s.execute(delete(ProfileTrait).where(ProfileTrait.key.not_in([t.key for t in traits] or [""]), ~ProfileTrait.key.like("ai.%")))
+        await s.execute(delete(ProfileTrait).where(ProfileTrait.key.not_in([t.key for t in traits] or [""]), ~ProfileTrait.key.like("ai.%"), ProfileTrait.key != "style"))
         await s.commit()
     return traits
 
@@ -389,6 +465,6 @@ async def traits(sm: async_sessionmaker) -> list[dict]:
             for r in rows]
 
 
-async def block(sm: async_sessionmaker, limit: int = 1400) -> str:
+async def block(sm: async_sessionmaker, limit: int = 2200) -> str:
     """The profile as lines for the assistant's context."""
     return "\n".join(f"- {t['summary']}" for t in await traits(sm))[:limit]

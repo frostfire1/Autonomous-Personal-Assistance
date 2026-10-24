@@ -759,3 +759,43 @@ def test_music_from_youtube_music_is_listened_and_the_ai_reply_is_validated():
     out = content.parse_reply(good)
     assert out and out["topics"] == [{"name": "cooking", "share": 100}] and out["music"] == ["Tulus"] and out["likes"] == ["recipes"]
     assert content.parse_reply("nonsense") is None and content.parse_reply('{"summary": "x"}') is None
+
+
+# ---- writing style, hobbies, care check-ins -------------------------------------------------------------------------------------
+
+
+def test_the_owners_writing_style_is_measured_and_turned_into_guidance():
+    from apa import profile
+
+    msgs = ["gak jadi beli yang itu deh, mahal banget", "udah makan belum nih kamu hari ini 😄", "besok aku ke kantor aja ya dong",
+            "tadi pagi kopi doang sih jadi lemes"] * 5
+    t = profile.style_trait(msgs)
+    assert t and t.key == "style" and t.data["lang"] == "Indonesian" and t.data["casual"] and 0.2 <= t.data["emoji"] <= 0.3
+    assert "casual" in t.summary and "Indonesian" in t.summary
+    assert profile.style_trait(msgs[:6]) is None and profile.style_trait(["ok", "ya"] * 20) is None  # too little, or too short to judge
+
+
+def test_hobbies_come_from_app_time_and_watched_topics():
+    from apa import profile
+
+    t = profile.hobby_trait([("games", 0.4), ("video", 0.25), ("work", 0.2), ("social", 0.03)], ["Mobile Legends", "Magic Chess", "Telegram"], ["gaming", "tech"])
+    assert t and "games 40%" in t.summary and "video 25%" in t.summary and "social" not in t.summary and "watches gaming, tech" in t.summary
+    assert profile.hobby_trait([("work", 0.9)], [], []) is None
+
+
+def test_care_speaks_up_only_for_a_reason_and_never_at_night():
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+
+    from apa import care
+
+    tz = ZoneInfo("Asia/Jakarta")
+    base = dict(sleep_mins=None, meals_today=1, food_habit=True, up_late_at=None, caffeine_mg=0.0, stress_avg=None)
+
+    def at(h, m=0, **kw):
+        return [s.key for s in care.decide(now=datetime(2026, 3, 10, h, m, tzinfo=tz), **{**base, **kw})]
+
+    assert at(10) == [] and at(10, sleep_mins=290) == ["sleep"] and at(15, sleep_mins=290) == []  # short sleep is for the morning
+    assert at(15, meals_today=0) == ["food"] and at(10, meals_today=0) == [] and at(15, meals_today=0, food_habit=False) == []
+    assert at(10, up_late_at=datetime(2026, 3, 10, 1, 40, tzinfo=tz)) == ["late"] and at(16, caffeine_mg=380) == ["caffeine"]
+    assert at(12, stress_avg=82) == ["stress"] and at(23, sleep_mins=200, stress_avg=90) == [] and at(6, sleep_mins=200) == []

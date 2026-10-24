@@ -390,6 +390,20 @@ async def _sync_youtube(sm: Any, now: datetime) -> None:
         log.warning("youtube_sync_failed", error=type(exc).__name__)
 
 
+async def care_checkin(ctx: dict) -> str:
+    """A caring message when the owner's own data suggests it (see apa.care). Silent when nothing stands out."""
+    from apa import care
+
+    if not get_settings().care_checkins or ctx.get("redis") is None or ctx.get("notifier") is None:
+        return "off"
+    tz = ZoneInfo(get_settings().timezone)
+    try:
+        return await care.run(ctx.get("sessionmaker", SessionLocal), ctx.get("llm"), ctx["redis"], ctx["notifier"], tz, datetime.now(tz))
+    except Exception as exc:
+        log.warning("care_checkin_failed", error=type(exc).__name__)
+        return "failed"
+
+
 async def memory_digest(ctx: dict) -> str:
     """Each night the assistant writes the day's diary entry from the day's chat (nothing when there was little to say)."""
     from apa import assistant_memory
@@ -505,12 +519,13 @@ class WorkerSettings:
     max_tries = COMMIT_MAX_TRIES
     functions = [
         process_inbound_event, commit_event, extract_event, master_event, chat_event, reconcile_event,
-        read_receipt, release_quarantined, briefing_telegram, phone_watch, memory_digest,
+        read_receipt, release_quarantined, briefing_telegram, phone_watch, memory_digest, care_checkin,
     ]
     cron_jobs = [
         cron(sheets_sync, second=0, run_at_startup=False),  # every 60 s
         cron(phone_watch, minute={5, 35}, run_at_startup=False),
         cron(memory_digest, hour=23, minute=55, run_at_startup=False),
+        cron(care_checkin, hour={9, 11, 14, 16, 19}, minute=20, run_at_startup=False),
         cron(steward_tick, minute={3, 13, 23, 33, 43, 53}, run_at_startup=False),  # every 10 min
         cron(cyberramen_poll, minute={0, 10, 20, 30, 40, 50}),
         cron(news_ingest, minute={0, 15, 30, 45}),

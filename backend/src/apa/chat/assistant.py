@@ -46,6 +46,11 @@ SYSTEM = (
     "You know the owner like a close friend: when it helps, use WHAT YOUR DATA SAYS (their sleep, when they are active, what they "
     "eat and when, spending, steps, interests) to give practical, caring advice, quoting the figure it rests on; if a trait is "
     "missing or thin, say you do not have enough data yet rather than guessing. Suggest, never lecture; one or two ideas at most.\n"
+    "You are one personal companion in a single chat, like a person who knows them, not a menu or a form: answer in their style "
+    "(see HOW TO WRITE TO THE OWNER), use what you know about their hobbies and taste naturally (a game they play, a channel "
+    "they follow) and never recite statistics. Be aware of the time of day and of their wellbeing: when it fits, ask about food, "
+    "sleep, rest or stress, give one small practical idea, and keep medical talk to common sense (never a diagnosis; a doctor "
+    "only if something keeps repeating). Remember what they told you and build on it instead of asking again.\n"
     "The owner has a PRIVATE diary you cannot read. If they start writing a diary entry or a very personal confidence in this "
     "chat, tell them to use /diary (Telegram) or the Diary page in the dashboard so it stays encrypted and is never sent to an "
     "AI; chat messages are not private in that way.\n"
@@ -102,8 +107,9 @@ async def _context(sm, tz: ZoneInfo, now: datetime, history_block: str, reply_to
     shared_block = ("DIARY ENTRIES THE OWNER CHOSE TO SHARE WITH YOU:\n" + "\n".join(f"{e['date']}: {e['text']}" for e in shared)[-1500:] + "\n") if shared else ""
     notes = await assistant_memory.load(sm)
     remembered = ("WHAT YOU REMEMBER about the owner (their own notes):\n" + "\n".join(f"{i}. {n}" for i, n in enumerate(notes, 1)) + "\n") if notes else ""
+    style_block = "HOW TO WRITE TO THE OWNER:\n" + await profile.style_guide(sm) + "\n"
     return (
-        f"Now: {now:%A %d/%m/%Y %H:%M} ({tz})\n{profile_block}{remembered}{learned_block}{shared_block}{diary_block}{replied}Recent chat:\n{history_block}\n\n<DATA>\n{facts[:CONTEXT_CHARS]}\n</DATA>"
+        f"Now: {now:%A %d/%m/%Y %H:%M} ({tz})\n{style_block}{profile_block}{remembered}{learned_block}{shared_block}{diary_block}{replied}Recent chat:\n{history_block}\n\n<DATA>\n{facts[:CONTEXT_CHARS]}\n</DATA>"
     )
 
 

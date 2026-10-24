@@ -65,6 +65,8 @@ class Settings(BaseSettings):
     notification_llm_per_hour: int = 30
     # Telegram says so when the phone app has not checked in for this many hours
     phone_silent_hours: int = 2
+    # Caring check-ins in Telegram (sleep, meals, late nights, caffeine, stress): at most 2 a day
+    care_checkins: bool = True
     # Raw chat text older than this many days is erased once the diary has captured it (0 = keep for ever)
     chat_keep_days: int = 7
 

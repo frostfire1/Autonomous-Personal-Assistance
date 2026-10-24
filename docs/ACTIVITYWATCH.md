@@ -83,3 +83,15 @@ Raw chat text older than `CHAT_KEEP_DAYS` (default 7, `0` keeps everything) is e
 into the diary (days that have no diary entry yet are summarised first, up to 5 a night; days still waiting keep their text).
 Payments and their confirmation messages, the diary, learned items, notes and the private journal are never touched.
 `POST /memory/prune` runs it now.
+
+## How the assistant uses all of this
+
+- **Your writing style** (`style` in the profile): language, message length, casualness and emoji are measured from your chat and the
+  assistant writes back the same way. It keeps the last good measurement after old chat is erased.
+- **Hobbies and taste** (`hobbies`, `ai.content`): app time by kind, your busiest apps and what you watch, listen to and like on
+  YouTube. The assistant mentions them the way a friend would and never recites numbers.
+- **Care check-ins:** a few times a day the server looks at last night's sleep, whether any meal was recorded, being up past
+  midnight, caffeine and stress. If something stands out it sends one short message in your style, for each reason at most once a day
+  and never more than two messages a day, never at night. It does not diagnose. Turn it off with `CARE_CHECKINS=false` in `.env`.
+- **Spoken briefings** use the language and voice you picked in settings; the style measurement does not change settings by itself.
+

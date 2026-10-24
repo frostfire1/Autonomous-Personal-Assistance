@@ -743,3 +743,50 @@ async def test_the_nightly_diary_reads_shared_journal_entries_and_never_private_
     assert await mem.summarize_day(stack, Llm(), now.date(), TZ) is not None  # a shared diary entry alone is enough for a day
     assert "OWNER (own diary): hari ini makan sate" in seen[0] and "rahasia" not in seen[0]
     assert [o["text"] for o in await mem.observations(stack, 3, now.date())] == ["sate"]
+
+
+async def test_a_care_check_in_is_sent_once_per_reason_and_at_most_twice_a_day(stack, redis):
+    from datetime import datetime
+
+    from apa import care
+    from apa.db.models.health import SleepSession
+    from tests.integration.helpers import FakeNotifier
+
+    now = datetime.now(TZ).replace(hour=10, minute=0)
+    async with stack() as s:
+        s.add(SleepSession(sleep_date=now.date(), total_sleep_mins=270, sleep_score=40))
+        await s.commit()
+    said = []
+
+    class Llm:
+        async def complete(self, route, system, user, **kw):
+            said.append(user)
+            return LLMResult("Kamu cuma tidur 4,5 jam semalam, pelan-pelan dulu ya hari ini.", "fake", 10, 10, 0)
+
+    n = FakeNotifier()
+    assert await care.run(stack, Llm(), redis, n, TZ, now) == "sent" and len(n.sent) == 1 and "sleep" in said[0] and "STYLE" in said[0]
+    assert await care.run(stack, Llm(), redis, n, TZ, now) == "quiet" and len(n.sent) == 1  # the same reason is not repeated today
+    assert await care.run(stack, Llm(), redis, n, TZ, now.replace(hour=23)) == "quiet"  # and never at night
+
+    class Down:
+        async def complete(self, *a, **k):
+            raise RuntimeError("model down")
+
+    await redis.delete(f"apa:care:sleep:{now:%Y%m%d}")
+    assert await care.run(stack, Down(), redis, n, TZ, now) == "sent" and "tidur" in n.sent[-1]  # a plain sentence if the model is down
+    await redis.delete(f"apa:care:sleep:{now:%Y%m%d}")
+    assert await care.run(stack, Llm(), redis, n, TZ, now) == "capped" and len(n.sent) == 2  # two a day is the limit
+
+
+async def test_the_style_trait_survives_a_refresh_when_the_chat_is_gone_and_guides_the_reply(stack):
+    from datetime import datetime
+
+    from apa import profile
+    from apa.db.models.intel import ProfileTrait
+
+    async with stack() as s:
+        s.add(ProfileTrait(key="style", summary="x", data={"lang": "Indonesian", "mixed": False, "words": 6, "casual": True, "emoji": 0.0}, evidence=30))
+        await s.commit()
+    await profile.refresh(stack, TZ, datetime.now(TZ))  # no chat left to measure: the earlier measurement stays
+    guide = await profile.style_guide(stack)
+    assert "Indonesian" in guide and "casual and friendly" in guide and "do not use emoji" in guide and "around 12 words" in guide
