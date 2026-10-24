@@ -36,6 +36,28 @@ its bind address in its config file ([configuration docs](https://docs.activityw
 `host` under `[server]` in `aw-server.toml` (Python server), or `address` in `config.toml` (Rust server), default localhost.
 That exposes the server to your network: keep it on a VPN (Tailscale), never the open internet.
 
+## Desktop: keep it running
+
+Install ActivityWatch on the computer (it starts the window and AFK watchers by itself), then run `aw_push.py` every 30 minutes. On
+Windows, once:
+
+```
+schtasks /Create /SC MINUTE /MO 30 /TN APA-usage /TR "python C:\path\to\tools\aw_push.py --server http://YOUR-SERVER:8000 --key YOUR_KEY"
+```
+
+## YouTube: what you watch
+
+YouTube's API does not share watch history, so you export it yourself: Google Takeout > YouTube and YouTube Music > History > JSON, then
+choose `watch-history.json` on the dashboard's **Diary** page (or `POST /import/youtube`). Channel and title of the last 90 days are
+kept, encrypted; the profile (`youtube`) names the channels and topics you come back to. Repeat the export now and then.
+
+## The advertising ID
+
+The Android advertising ID is only a resettable number that ad networks use to recognise a phone: it holds no information about you
+or the ads you see, and Google offers no API for your ad profile. It is not used here. Your interests are learned from what you
+actually use (app time, YouTube, the diary). Google's own list of your ad interests is at myadcenter.google.com if you want to read
+it and tell the assistant with `/diary` or "remember that I like ...".
+
 ## What the assistant learns from the diary (observations)
 
 Each night the diary also records what you said you ate, felt, did, liked and disliked as structured observations (a meal at a

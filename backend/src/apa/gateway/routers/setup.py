@@ -5,7 +5,7 @@ import asyncio
 import io
 
 import httpx
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Body, Depends, HTTPException, Request
 from pydantic import BaseModel
 from sqlalchemy import text
 
@@ -219,6 +219,25 @@ async def prune_chat_now(request: Request) -> dict:
     written = await retention.catch_up(SessionLocal, request.app.state.llm, tz, now.date())
     pruned = await retention.prune(SessionLocal, tz, now, get_settings().chat_keep_days)
     return {"diary_days_written": written, "keep_days": get_settings().chat_keep_days, **pruned}
+
+
+@router.post("/import/youtube")
+async def import_youtube(items: list[dict] = Body(max_length=50000)) -> dict:
+    """The owner's Google Takeout `watch-history.json` (YouTube and YouTube Music > History, JSON). Keeps the channel and title of
+    what was watched or searched in the last 90 days, encrypted, for the profile. Importing again replaces those days."""
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+
+    from apa import assistant_memory, youtube
+    from apa.core.secrets import SecretsUnavailable
+
+    tz = ZoneInfo(get_settings().timezone)
+    by_day = youtube.parse(items, tz, datetime.now(tz))
+    try:
+        stored = await assistant_memory.add_watch(SessionLocal, by_day)
+    except SecretsUnavailable:
+        raise HTTPException(status_code=503, detail="SECRETS_KEY is not set, so nothing can be stored safely") from None
+    return {"ok": True, "items": stored, "days": len(by_day), "watched": sum(1 for v in by_day.values() for i in v if i["k"] == "watched")}
 
 
 @router.get("/usage")

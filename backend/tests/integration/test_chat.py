@@ -637,3 +637,21 @@ async def test_old_chat_text_is_erased_once_the_day_is_in_the_diary_but_payments
     assert events["ret-1"]["text"] == "kopi 25rb"  # a payment keeps its text (audit)
     assert events["ret-2"]["text"] == "belum diringkas satu" and events["ret-4"]["text"] == "cerita baru"
     assert bodies == [None, "balasan baru"]
+
+
+async def test_watch_history_is_stored_encrypted_replaced_per_day_and_kept_out_of_learned(stack):
+    from datetime import date
+
+    from sqlalchemy import text
+
+    from apa import assistant_memory as mem
+
+    today = date.today()
+    day = {today: [{"k": "watched", "c": "Kelas Kode", "t": "Belajar python"}, {"k": "searched", "c": "", "t": "kopi"}]}
+    assert await mem.add_watch(stack, day) == 2 and await mem.add_watch(stack, day) == 2  # importing twice does not double
+    got = await mem.watched(stack, 5, today)
+    assert [(w["k"], w["c"]) for w in got] == [("watched", "Kelas Kode"), ("searched", "")]
+    async with stack() as s:
+        raw = (await s.execute(text("select text from memory_items where kind = 'watch'"))).scalars().all()
+    assert len(raw) == 2 and all("python" not in r and "Kelas" not in r for r in raw)
+    assert await mem.learned(stack) == [] and await mem.search_items(stack, "python") == []

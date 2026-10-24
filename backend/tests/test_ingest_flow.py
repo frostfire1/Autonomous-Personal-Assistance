@@ -642,3 +642,41 @@ def test_digest_observations_are_validated():
     got = mem.parse_observations(raw)
     assert [(o["type"], o["at"], o["mood"]) for o in got] == [("meal", "19:30", None), ("mood", "", 2), ("like", "", None), ("skincare", "", None), ("meal", "", None)]
     assert mem.parse_observations("not json") == [] and mem.parse_observations('{"summary": "x"}') == []
+
+
+# ---- YouTube Takeout import and the daily usage trend --------------------------------------------------------------------------
+
+
+def test_the_youtube_export_is_parsed_into_watched_and_searched_items_and_a_trait():
+    from datetime import UTC, datetime
+    from zoneinfo import ZoneInfo
+
+    from apa import profile, youtube
+
+    tz = ZoneInfo("Asia/Jakarta")
+    now = datetime(2026, 3, 10, 12, 0, tzinfo=UTC)
+    items = [{"title": f"Watched Belajar python bagian {i}", "titleUrl": "https://youtu.be/x", "subtitles": [{"name": "Kelas Kode"}],
+              "time": "2026-03-09T10:00:00.000Z"} for i in range(8)]
+    items += [{"title": "Watched Resep nasi goreng python", "subtitles": [{"name": "Dapur Ani"}], "time": "2026-03-08T10:00:00Z"},
+              {"title": "Watched python tips", "subtitles": [{"name": "Kelas Kode"}], "time": "2026-03-08T11:00:00Z"},
+              {"title": "Searched for kopi arabika", "time": "2026-03-08T09:00:00Z"},
+              {"title": "Watched https://www.youtube.com/watch?v=gone", "time": "2026-03-08T09:00:00Z"},  # removed video
+              {"title": "Watched too old", "subtitles": [{"name": "X"}], "time": "2025-01-01T00:00:00Z"},
+              {"title": "Visited a page", "time": "2026-03-08T09:00:00Z"}, {"nonsense": True}, "text"]
+    by_day = youtube.parse(items, tz, now)
+    flat = [i for v in by_day.values() for i in v]
+    assert len(flat) == 11 and sum(i["k"] == "searched" for i in flat) == 1
+    t = profile.watch_trait([(i["k"], i["c"], i["t"]) for i in flat])
+    assert t and t.key == "youtube" and "Kelas Kode (9)" in t.summary and "python" in t.summary and "kopi arabika" in t.summary
+    assert profile.watch_trait([("watched", "A", "satu dua")]) is None
+
+
+def test_the_usage_trait_reports_this_weeks_trend():
+    from datetime import date, timedelta
+    from zoneinfo import ZoneInfo
+
+    from apa import profile
+
+    rows = [(date(2026, 1, 1) + timedelta(days=i), "p", "android", "Chrome", 3600 if i < 7 else 7200, None) for i in range(14)]
+    t = profile.usage_trait(rows, ZoneInfo("Asia/Jakarta"))
+    assert t and "The last 7 days average 2.0 h, up 100% on the week before" in t.summary and len(t.data["daily"]) == 14

@@ -194,12 +194,35 @@ def usage_trait(rows: list[tuple[date, str, str, str, int, datetime | None]], tz
     cats = [(c, s) for c, s in sorted(u["per_cat"].items(), key=lambda x: -x[1]) if c != "other"][:3]
     kinds = ", ".join(f"{k} {usage.hours(s / u['days'])}" for k, s in sorted(u["per_kind"].items(), key=lambda x: -x[1]))
     late = len(u["late_days"])
+    days_sorted = sorted(u["per_day"].items())
+    recent, before = [s for _, s in days_sorted[-7:]], [s for _, s in days_sorted[-14:-7]]
+    trend = (f" The last {len(recent)} days average {usage.hours(mean(recent))}, "
+             f"{'up' if mean(recent) >= mean(before) else 'down'} {abs(round(100 * (mean(recent) / mean(before) - 1)))}% on the week before."
+             if len(before) >= 3 and len(recent) >= 3 else "")
     text = (f"Active on devices about {usage.hours(avg)} a day over {u['days']} days ({kinds}). Most used: "
             + ", ".join(f"{a} ({usage.hours(s / u['days'])}/day)" for a, s in top) + ".")
     if cats and total:
         text += " By kind: " + ", ".join(f"{c} {round(100 * s / total)}%" for c, s in cats) + "."
     text += f" Still on a device after 23:00 on {late} of {u['days']} days." if late else ""
-    return Trait("screen_time", text, u["days"], {"avg_seconds": round(avg), "top_apps": top, "categories": cats, "late_days": late})
+    text += trend
+    return Trait("screen_time", text, u["days"], {"avg_seconds": round(avg), "daily": [(d.isoformat(), s) for d, s in days_sorted[-14:]], "top_apps": top, "categories": cats, "late_days": late})
+
+
+def watch_trait(items: list[tuple[str, str, str]]) -> Trait | None:
+    """What the owner watches and searches on YouTube: (kind, channel, title) from their Takeout export."""
+    watched = [(c, t) for k, c, t in items if k == "watched"]
+    if len(watched) < 10:
+        return None
+    channels = Counter(c for c, _ in watched if c).most_common(5)
+    words = Counter(w for _, t in watched for w in _WORD.findall(t.lower()) if w not in STOP)
+    topics = [w for w, n in words.most_common(8) if n >= 3][:6]
+    searches = Counter(t.lower() for k, _, t in items if k == "searched").most_common(4)
+    text = f"On YouTube ({len(watched)} videos): mostly " + ", ".join(f"{c} ({n})" for c, n in channels) + "." if channels else f"Watched {len(watched)} videos on YouTube."
+    if topics:
+        text += " Topics that keep coming up: " + ", ".join(topics) + "."
+    if searches:
+        text += " Searched for: " + ", ".join(t for t, _ in searches) + "."
+    return Trait("youtube", text, len(watched), {"channels": channels, "topics": topics, "searches": searches})
 
 
 def habits_trait(obs: list[tuple[str, str]]) -> Trait | None:
@@ -309,6 +332,7 @@ async def compute(sm: async_sessionmaker, tz: ZoneInfo, now: datetime) -> list[T
 
     usage_rows = await usage_mod.recent(sm, 30, now.date())
     obs = await assistant_memory.observations(sm, 60, now.date())
+    watch = await assistant_memory.watched(sm, 90, now.date())
     messages = [str(p.get("text", "")) for _, p in msg_rows]
     p = await prefs.load(sm)
     learned_texts = [i["text"] for i in await assistant_memory.learned(sm) if i["kind"] in ("preference", "goal", "person")]
@@ -329,6 +353,7 @@ async def compute(sm: async_sessionmaker, tz: ZoneInfo, now: datetime) -> list[T
         mood_trait([(o["date"], o["mood"]) for o in obs if o.get("mood")], [(d, m or 0) for d, m, _ in sleeps]),
         likes_trait([(o["type"], o["text"]) for o in obs]),
         habits_trait([(o["type"], o["text"]) for o in obs]),
+        watch_trait([(w["k"], w.get("c", ""), w.get("t", "")) for w in watch]),
     ]
     return [t for t in traits if t is not None]
 

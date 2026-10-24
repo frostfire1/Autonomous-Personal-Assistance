@@ -46,6 +46,7 @@ KINDS = ("person", "preference", "goal", "routine", "plan", "health", "other")
 OBS = "obs"  # a structured observation of the day (meal, mood, like...): data for the profile, never shown as text or searched
 OBS_TYPES = ("meal", "drink", "mood", "activity", "like", "dislike", "health", "place", "person", "other")
 MAX_OBS_PER_DAY = 12
+WATCH = "watch"  # what the owner watched or searched on YouTube (their Takeout export), one row per item
 _CLOCK = re.compile(r"^([01]?\d|2[0-3]):([0-5]\d)$")
 UNREADABLE = "[cannot be read: the encryption key is missing or has changed]"
 _LONG_DIGITS = re.compile(r"\d[\d\s-]{8,}\d")  # account, card and phone numbers
@@ -289,6 +290,31 @@ async def observations(sm: async_sessionmaker, days: int = 60, today: date | Non
     return out
 
 
+async def add_watch(sm: async_sessionmaker, by_day: dict[date, list[dict]]) -> int:
+    """Store the imported items; every day in the import is replaced (importing again does not double). -> items stored."""
+    rows = [_row(WATCH, json.dumps(i, ensure_ascii=False), day=d, source="import", shared=False) for d, items in by_day.items() for i in items]
+    async with sm() as s:
+        if by_day:
+            await s.execute(delete(MemoryItem).where(MemoryItem.kind == WATCH, MemoryItem.day.in_(list(by_day))))
+        s.add_all(rows)
+        await s.commit()
+    return len(rows)
+
+
+async def watched(sm: async_sessionmaker, days: int = 90, today: date | None = None) -> list[dict]:
+    """[{"date", "k", "c", "t"}] for the last `days` days, oldest first."""
+    since = (today or date.today()) - timedelta(days=days)
+    out = []
+    for r in await _items(sm, MemoryItem.kind == WATCH, MemoryItem.day >= since):
+        try:
+            o = json.loads(_open(r))
+        except ValueError:
+            continue
+        if isinstance(o, dict) and r.day:
+            out.append({"date": r.day, **o})
+    return out
+
+
 async def search_diary(sm: async_sessionmaker, query: str | None, days: int) -> list[dict]:
     since = (date.today() - timedelta(days=days)).isoformat()
     q = (query or "").lower().strip()
@@ -297,7 +323,7 @@ async def search_diary(sm: async_sessionmaker, query: str | None, days: int) -> 
 
 # ---- learned items ----------------------------------------------------------------------------------------------------------
 
-_LEARNED = ~MemoryItem.kind.in_(("note", "diary", "journal", OBS))
+_LEARNED = ~MemoryItem.kind.in_(("note", "diary", "journal", OBS, WATCH))
 
 
 async def learned(sm: async_sessionmaker) -> list[dict]:

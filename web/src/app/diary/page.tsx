@@ -10,6 +10,7 @@ export default function DiaryPage() {
   const [text, setText] = useState("");
   const [shared, setShared] = useState(false);
   const [msg, setMsg] = useState("");
+  const [yt, setYt] = useState("");
 
   async function save() {
     if (!text.trim()) return;
@@ -41,6 +42,28 @@ export default function DiaryPage() {
           <span className="muted">{msg}</span>
         </div>
         <p className="muted">This page is only as private as the connection to it: use your home network or Tailscale or WireGuard, not the open internet.</p>
+      </div>
+
+      <h2>YouTube history</h2>
+      <div className="card">
+        <p className="muted">
+          So the assistant knows what you watch: in Google Takeout choose <b>YouTube and YouTube Music &gt; History</b>, format <b>JSON</b>, download it
+          and pick <code>watch-history.json</code> here. Only the channel and title of the last 90 days are kept, encrypted. YouTube gives no live
+          access to your history, so repeat this now and then.
+        </p>
+        <input type="file" accept="application/json,.json" onChange={async (e) => {
+          const f = e.target.files?.[0];
+          if (!f) return;
+          setYt("Reading...");
+          try {
+            const r = await post<{ watched: number; days: number }>("/import/youtube", JSON.parse(await f.text()));
+            setYt(`Imported ${r.watched} videos from ${r.days} days.`);
+          } catch (err) {
+            setYt(`Not imported: ${(err as Error).message}`);
+          }
+          e.target.value = "";
+        }} />
+        <span className="muted"> {yt}</span>
       </div>
 
       <h2>Your entries</h2>
