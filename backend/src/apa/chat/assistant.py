@@ -35,7 +35,11 @@ MEMORY_TOOL_DOC = """Memory tools (they take effect at once; then answer):
 - about_set {"domain": string, "key": string, "value": string, "why": string}  write one fact about the owner into their card.
   domains: identity, comfort (language, tone, length, emoji, nickname), personality, hobbies, tastes, routines, wellbeing, money, people,
   goals, plans. Only what the owner said or clearly showed ("why" = the evidence in a few words). Never overwrites what the owner locked.
-- about_forget {"domain": string, "key": string}  remove a fact you wrote (not one the owner set)"""
+- about_forget {"domain": string, "key": string}  remove a fact you wrote (not one the owner set)
+- research {"topic": string}  look a topic up on the web (a few minutes; the findings with links arrive later as a message). Use it when
+  the owner asks you to research or find out something you cannot answer from your data. The topic is a short general phrase with no
+  personal data or numbers. Tell the owner it is started, in one short sentence.
+- research_last {}  the latest research report and its links, for a follow-up question"""
 
 SYSTEM = (
     "You are APA, the owner's personal assistant (money, health, news, security and plain conversation). Answer in the "
@@ -149,6 +153,13 @@ async def converse(
         if name in READ_TOOLS and not final:
             result = await run_read(sm, tz, now, name, args)
             log.info("assistant_lookup", tool=name)
+            transcript += [f"TOOL {name} {json.dumps(args, ensure_ascii=False)[:200]}", f"RESULT:\n{result}"]
+            continue
+        if name in ("research", "research_last") and not final:
+            from apa import research
+
+            result = await research.start(redis, args.get("topic")) if name == "research" else await research.last_report(redis)
+            log.info("assistant_research", tool=name)
             transcript += [f"TOOL {name} {json.dumps(args, ensure_ascii=False)[:200]}", f"RESULT:\n{result}"]
             continue
         if name in ("about_set", "about_forget") and not final:

@@ -70,7 +70,29 @@ backend_env() {
   ENVARGS=(--env-file .env -e TZ="$TZV" -e DATABASE_URL="$APP_URL" -e REDIS_URL="$redis"
     -e LITELLM_BASE_URL="$llm" -e LITELLM_MASTER_KEY="$key" -e EVIDENCE_BACKEND="$ev")
   [ "$S3_MODE" = local ] && ENVARGS+=(-e EVIDENCE_DIR=/data/evidence -v apa-evidence:/data/evidence)
+  [ "${RESEARCH_MODE:-off}" = bundled ] && ENVARGS+=(-e RESEARCH_URL=http://gptr:8000)
   return 0
+}
+
+# ---- web research: GPT Researcher (Apache-2.0), built once from its pinned release, run next to the app (RESEARCH_MODE=bundled) ----
+RESEARCH_REF="${RESEARCH_REF:-v3.7.0}"
+RESEARCH_IMG="localhost/apa-gptr:$RESEARCH_REF"
+build_research() {  # the first build takes several minutes (browsers and Python packages); later runs reuse the image
+  [ "${RESEARCH_MODE:-off}" = bundled ] || return 0
+  $CE image inspect "$RESEARCH_IMG" >/dev/null 2>&1 && return 0
+  local src="$ROOT/.gptr-src"
+  rm -rf "$src"; mkdir -p "$src"
+  curl -fsSL "https://github.com/assafelovic/gpt-researcher/archive/refs/tags/$RESEARCH_REF.tar.gz" | tar xz -C "$src" --strip-components=1
+  $CE build -q $BUILD_FLAGS -t "$RESEARCH_IMG" "$src" >/dev/null
+  rm -rf "$src"
+}
+start_research() {
+  [ "${RESEARCH_MODE:-off}" = bundled ] || return 0
+  local emb="${GPTR_EMBEDDING:-}"
+  [ -n "$emb" ] || { [ -n "${GEMINI_API_KEY:-}" ] && emb="google_genai:models/text-embedding-004" || emb="openai:text-embedding-3-small"; }
+  rmc gptr
+  # its language models are this app's own gateway (the router-* names in infra/litellm/config.yaml); search is DuckDuckGo unless TAVILY_API_KEY is set
+  $CE run -d --name gptr --network $NET --restart unless-stopped --memory=3g     -e OPENAI_API_KEY="$LITELLM_MASTER_KEY" -e OPENAI_BASE_URL="${LITELLM_BASE_URL:-http://litellm:4000/v1}"     -e FAST_LLM="openai:${GPTR_FAST_LLM:-router-routine-classifier}" -e SMART_LLM="openai:${GPTR_SMART_LLM:-router-macro-reasoning}"     -e STRATEGIC_LLM="openai:${GPTR_SMART_LLM:-router-macro-reasoning}" -e EMBEDDING="$emb" -e GOOGLE_API_KEY="${GEMINI_API_KEY:-}"     -e RETRIEVER="${GPTR_RETRIEVER:-$([ -n "${TAVILY_API_KEY:-}" ] && echo tavily,duckduckgo || echo duckduckgo)}" -e TAVILY_API_KEY="${TAVILY_API_KEY:-}"     -e MAX_ITERATIONS="${GPTR_MAX_ITERATIONS:-2}" -e LANGUAGE="${GPTR_LANGUAGE:-english}" -e TZ="$TZV"     "$RESEARCH_IMG" >/dev/null
 }
 
 # ---- bundled Garage (S3): one container, a bucket and a key made for you the first time ----
@@ -127,6 +149,7 @@ down() { rmc web api worker bot migrate litellm redis postgres garage; }
 up() {
   net
   $CE build -q $BUILD_FLAGS -t $IMG backend
+  build_research  # before anything is stopped: a long first build must not take the app down
   rmc litellm migrate api worker bot
   if [ "$DB_MODE" = bundled ]; then
     rmc postgres
@@ -146,6 +169,7 @@ up() {
       ghcr.io/berriai/litellm:main-stable --config /app/config.yaml --port 4000 >/dev/null
   fi
   [ "$S3_MODE" = garage ] && start_garage
+  start_research
 
   if [ "$DB_MODE" = bundled ]; then
     echo -n "waiting for postgres"

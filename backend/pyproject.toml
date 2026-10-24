@@ -76,6 +76,7 @@ ignore = ["B008"]  # FastAPI Depends() in defaults is the framework idiom
 "src/apa/care.py" = ["E501"]
 "src/apa/daily.py" = ["E501"]
 "src/apa/about.py" = ["E501"]
+"src/apa/research.py" = ["E501"]
 "src/apa/companion.py" = ["E501"]
 "src/apa/llm_config.py" = ["E501"]  # docstrings and owner-facing labels
 "src/apa/gateway/routers/llm.py" = ["E501"]

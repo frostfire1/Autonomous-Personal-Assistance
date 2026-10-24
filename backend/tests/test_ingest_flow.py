@@ -845,3 +845,50 @@ def test_the_card_text_groups_by_domain_and_marks_what_the_owner_set():
     text = about.render(entries)
     assert text.splitlines() == ["[comfort]", "- language: Indonesian, casual (set by the owner)", "[tastes]", "- likes spicy food", "[personality]", "- Playful and curious."]
     assert about.slug("Favourite Game!") == "favourite_game" and about._dom("nonsense") == "other"
+
+
+# ---- web research (GPT Researcher) ---------------------------------------------------------------------------------------------------
+
+
+def test_a_research_topic_is_kept_short_and_generic_and_links_are_collected_without_repeats():
+    from apa import research
+
+    assert research.clean_topic("best sleep habits for programmers") == "best sleep habits for programmers"
+    assert research.clean_topic("my account 1234567890 is hacked") == "" and research.clean_topic("mail me at a@b.com about it") == ""
+    assert research.clean_topic("ab") == "" and research.clean_topic(None) == ""
+    info = {"source_urls": ["https://a.example/x", "https://b.example/y"]}
+    report = "Findings [a](https://a.example/x) and [c](https://c.example/z). See https://c.example/z. http://localhost:8000/x"
+    assert research.links(report, info) == ["https://a.example/x", "https://b.example/y", "https://c.example/z"]
+
+
+def test_the_research_service_answer_is_read_and_a_failure_is_explained(monkeypatch):
+    import asyncio
+
+    import httpx
+
+    from apa import research
+    from apa.core.settings import get_settings
+
+    monkeypatch.setenv("RESEARCH_URL", "http://gptr:8000")
+    get_settings.cache_clear()
+    seen = {}
+
+    def handler(req):
+        seen["body"] = req.read().decode()
+        if "fail" in seen["body"]:
+            return httpx.Response(500)
+        return httpx.Response(200, json={"report": "# Sleep\n" + "Adults need 7 hours of sleep. " * 8 + "[src](https://sleep.example/a)", "research_information": {"source_urls": ["https://sleep.example/b"]}})
+
+    async def go():
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+            out = await research.run("sleep needs of adults", http)
+            assert out["links"] == ["https://sleep.example/b", "https://sleep.example/a"] and "7 hours" in out["report"]
+            assert '"generate_in_background":false' in seen["body"].replace(" ", "")
+            try:
+                await research.run("please fail this", http)
+                raise AssertionError("must raise")
+            except research.ResearchError as e:
+                assert "500" in str(e)
+
+    asyncio.run(go())
+    get_settings.cache_clear()

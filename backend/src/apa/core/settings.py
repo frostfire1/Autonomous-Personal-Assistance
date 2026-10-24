@@ -69,6 +69,10 @@ class Settings(BaseSettings):
     care_checkins: bool = True
     # The assistant starts a chat now and then (morning, midday, evening) and stops if not answered
     companion_chats: bool = True
+    # Web research by GPT Researcher (RESEARCH_MODE=bundled starts it): address, seconds to wait, a day
+    research_url: str = ""
+    research_timeout_s: int = 900
+    research_per_day: int = 5
     companion_max_per_day: int = 3
     # Raw chat text older than this many days is erased once the diary has captured it (0 = keep for ever)
     chat_keep_days: int = 7

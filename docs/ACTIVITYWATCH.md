@@ -101,4 +101,8 @@ Payments and their confirmation messages, the diary, learned items, notes and th
 - **The briefing after the alarm is one MP3:** the short briefing is spoken in a single call to the voice engine (so it costs one request,
   not one per topic) and cached; the full briefing, started by hand, still plays topic by topic.
 - **Spoken briefings** use the language and voice you picked in settings; the style measurement does not change settings by itself.
-
+- **Web research** (`RESEARCH_MODE=bundled`): ask it to look something up and it starts a background research with
+  [GPT Researcher](https://github.com/assafelovic/gpt-researcher) (Apache-2.0, built from a pinned release by `deploy.sh`, about 4 GB).
+  A few minutes later the findings arrive in the chat, in your style, with the source links; the full report stays for a week for
+  follow-up questions. Only the topic leaves (numbers and personal data are refused), the models are this app's own gateway, search is
+  DuckDuckGo unless `TAVILY_API_KEY` is set, and `RESEARCH_PER_DAY` (5) limits the use. Embeddings use `GEMINI_API_KEY` (a small call).

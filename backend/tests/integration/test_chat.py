@@ -935,3 +935,53 @@ async def test_the_about_me_dataset_is_one_card_the_owner_can_edit_lock_and_expo
     rows = await about.export_rows(stack)
     assert {"id", "domain", "key", "value", "source", "confidence", "locked", "evidence", "updated"} == set(rows[0])
     assert about.export_jsonl(rows).count("\n") == len(rows)
+
+
+async def test_research_is_queued_once_per_ask_limited_per_day_and_the_findings_come_back_as_a_message(stack, redis, monkeypatch):
+    from sqlalchemy import select
+
+    from apa import research
+    from apa.core.settings import get_settings
+    from apa.workers.settings import research_run
+    from tests.integration.helpers import FakeNotifier
+
+    monkeypatch.setenv("RESEARCH_URL", "http://gptr:8000")
+    monkeypatch.setenv("RESEARCH_PER_DAY", "2")
+    get_settings.cache_clear()
+    jobs = []
+
+    async def enqueue(name, *a, **k):
+        jobs.append((name, *a))
+
+    redis.enqueue_job = enqueue
+    assert "has started" in await research.start(redis, "how do vitamins affect sleep") and jobs == [("research_run", "how do vitamins affect sleep")]
+    assert "cannot be researched" in await research.start(redis, "my number 08123456789 leaked")
+    assert "has started" in await research.start(redis, "best cybersecurity careers")
+    assert "limit of 2" in await research.start(redis, "another topic entirely") and len(jobs) == 2
+
+    async def fake_run(topic, http=None):
+        return {"report": "Vitamin D can help sleep a little. " * 6, "links": ["https://sleep.example/a", "https://sleep.example/b"]}
+
+    monkeypatch.setattr(research, "run", fake_run)
+
+    class Llm:
+        async def complete(self, route, system, user, **kw):
+            assert "STYLE" in user and "vitamins" in user
+            return LLMResult("Kayaknya vitamin D bisa bantu tidur sedikit, tapi efeknya kecil.", "fake", 10, 10, 0)
+
+    n = FakeNotifier()
+    ctx = {"sessionmaker": stack, "notifier": n, "redis": redis, "llm": Llm()}
+    assert await research_run(ctx, "how do vitamins affect sleep") == "sent"
+    assert n.sent[0].startswith("Kayaknya vitamin D") and n.sent[0].endswith("https://sleep.example/a\nhttps://sleep.example/b")
+    assert "Vitamin D can help" in await research.last_report(redis)  # kept for follow-up questions
+    async with stack() as s:
+        assert len((await s.execute(select(TelegramMessage))).scalars().all()) == 1
+
+    async def broken(topic, http=None):
+        raise research.ResearchError("the research service answered 500")
+
+    monkeypatch.setattr(research, "run", broken)
+    assert await research_run(ctx, "how do vitamins affect sleep") == "failed" and "belum berhasil" in n.sent[-1]
+    monkeypatch.delenv("RESEARCH_URL")
+    get_settings.cache_clear()
+    assert "not set up" in await research.start(redis, "anything about sleep")

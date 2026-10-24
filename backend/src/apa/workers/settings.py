@@ -11,7 +11,7 @@ from typing import Any
 from zoneinfo import ZoneInfo
 
 import httpx
-from arq import Retry, cron
+from arq import Retry, cron, func
 
 from apa import currency
 from apa.chat import batch, batch_flow
@@ -418,6 +418,32 @@ async def companion_chat(ctx: dict) -> str:
         return "failed"
 
 
+async def research_run(ctx: dict, topic: str) -> str:
+    """Research a topic with GPT Researcher and tell the owner what was found, with links, in their own style (see apa.research)."""
+    from apa import profile, research
+    from apa.chat import agent
+    from apa.db.models.ops import TelegramMessage
+
+    sm = ctx.get("sessionmaker", SessionLocal)
+    notifier, redis, llm = ctx.get("notifier"), ctx.get("redis"), ctx.get("llm")
+    if notifier is None:
+        return "no_notifier"
+    try:
+        result = await research.run(topic)
+    except research.ResearchError as exc:
+        log.warning("research_failed", error=str(exc)[:120])
+        await notifier.send(f"Maaf, aku belum berhasil mencari tentang «{topic[:80]}» ({exc}). Coba lagi nanti ya.")
+        return "failed"
+    text = await research.message_for(llm, await profile.style_guide(sm), topic, result)
+    message_id = await notifier.send(text)
+    await research.remember_report(redis, topic, result)
+    await agent.remember_assistant(redis, text.split("\n\n")[0])
+    async with sm() as db:
+        db.add(TelegramMessage(direction="out", chat_id=get_settings().telegram_owner_id or 0, message_id=message_id, kind="reply", body=text[:1500]))
+        await db.commit()
+    return "sent"
+
+
 async def memory_digest(ctx: dict) -> str:
     """Each night the assistant writes the day's diary entry from the day's chat (nothing when there was little to say)."""
     from apa import assistant_memory
@@ -537,7 +563,7 @@ class WorkerSettings:
     max_tries = COMMIT_MAX_TRIES
     functions = [
         process_inbound_event, commit_event, extract_event, master_event, chat_event, reconcile_event,
-        read_receipt, release_quarantined, briefing_telegram, phone_watch, memory_digest, care_checkin, companion_chat,
+        read_receipt, release_quarantined, briefing_telegram, phone_watch, memory_digest, care_checkin, companion_chat, func(research_run, timeout=1200, max_tries=1),
     ]
     cron_jobs = [
         cron(sheets_sync, second=0, run_at_startup=False),  # every 60 s
