@@ -4,6 +4,7 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useEffect, useState, type FormEvent, type ReactNode } from "react";
 import { api, getKey, setKey } from "@/lib/api";
+import { setCurrency } from "@/lib/format";
 
 const PANELS = [
   ["/", "Overview"],
@@ -25,8 +26,16 @@ export default function Shell({ children }: { children: ReactNode }) {
   const [key, setKeyState] = useState<string | null>(null); // null until the browser has been asked
   const [typed, setTyped] = useState("");
   const [msg, setMsg] = useState("");
+  const [ready, setReady] = useState(false); // the home currency is known, so money renders right the first time
 
   useEffect(() => setKeyState(getKey()), []);
+  useEffect(() => {
+    if (!key) return;
+    api<{ prefs: { currency?: string } }>("/prefs", key)
+      .then((p) => setCurrency(p.prefs.currency ?? "IDR"))
+      .catch(() => undefined) // an older server or a hiccup: rupiah, as before
+      .finally(() => setReady(true));
+  }, [key]);
 
   async function login(e: FormEvent) {
     e.preventDefault();
@@ -74,7 +83,7 @@ export default function Shell({ children }: { children: ReactNode }) {
           Sign out
         </button>
       </nav>
-      <main>{children}</main>
+      <main>{ready ? children : null}</main>
     </>
   );
 }

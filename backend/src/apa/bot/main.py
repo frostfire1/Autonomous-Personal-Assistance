@@ -11,6 +11,7 @@ from aiogram import Bot, Dispatcher, F
 from aiogram.types import BotCommand, CallbackQuery, Message
 from arq import ArqRedis, create_pool
 
+from apa import currency
 from apa.bot.commands import handle_command, parse_command
 from apa.bot.menu import BOT_COMMANDS, handle_callback, menu_key, parse_action_command, view_for
 from apa.bot.photo import handle_photo
@@ -207,6 +208,7 @@ async def main() -> None:
     if not s.telegram_bot_token:
         raise SystemExit("TELEGRAM_BOT_TOKEN is not set")
     arq = await create_pool(arq_redis_settings())
+    currency_task = currency.start_refresher(SessionLocal)  # keep the home currency fresh
     bot = Bot(s.telegram_bot_token)
     await bot.set_my_commands([BotCommand(command=c, description=d) for c, d in BOT_COMMANDS])
     private = PrivateManager(
@@ -216,6 +218,7 @@ async def main() -> None:
         # `arq`, `store` and `private` are injected into handlers by parameter name
         await dp.start_polling(bot, arq=arq, store=DynamicEvidenceStore(), private=private)
     finally:
+        currency_task.cancel()
         await private.end_all(
             "shutdown"
         )  # a stopping bot purges the open session instead of leaving it behind

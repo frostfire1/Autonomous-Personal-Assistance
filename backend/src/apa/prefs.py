@@ -95,7 +95,18 @@ class Prefs(BaseModel):
     lon: float | None = Field(default=None, ge=-180, le=180)
     topics: list[str] = Field(default_factory=lambda: ["nasional", "cyber"])  # which news sections the briefing has
     keywords: list[str] = Field(default_factory=list)  # words to watch for in any headline (a "your interests" section)
+    currency: str = "IDR"  # the ledger's one home currency (no conversion): how money is written and which amounts are read
     gps: bool = False  # the weather follows the phone's position (sent by the app) instead of a typed city
+
+    @field_validator("currency")
+    @classmethod
+    def _known_currency(cls, v: str) -> str:
+        from apa.currency import CURRENCIES
+
+        v = v.strip().upper()
+        if v not in CURRENCIES:
+            raise ValueError(f"unknown currency; choose one of {', '.join(CURRENCIES)}")
+        return v
 
     @field_validator("language")
     @classmethod

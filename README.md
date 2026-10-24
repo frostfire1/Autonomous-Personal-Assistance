@@ -9,7 +9,7 @@ differs from the blueprint.
 **The defaults are the blueprint's** (Indonesian briefing, Indonesian national news, national and cybersecurity topics,
 the kunciai and Osiris AI providers, Garage S3, Postgres, Redis). **Everything else is changeable** from the web
 dashboard after setup: AI providers and the model of every agent, your own agents, news countries, feeds and topics, the
-CVE rule, voices and languages, storage.
+CVE rule, voices and languages, the home currency, storage.
 
 ## Quick start
 
@@ -85,7 +85,8 @@ Use `127.0.0.1`, not `localhost` (arq's 1 s connect timeout trips when `localhos
 Tested: the whole backend with unit tests and, against a real Postgres and Redis, integration tests with a fake model;
 text extraction, the debate and the vision reading live against real providers; the briefing in English and Japanese,
 topics, feeds and other countries live on a running server; the Android app builds, passes its unit tests and runs on a
-phone. Not tested: Huawei Health Kit against the real service, `setup.sh` on a clean machine and its Docker or Podman
+phone. Not tested: banks or currencies other than Indonesian rupiah beyond unit tests (the receipt-photo path still assumes whole
+numbers), Huawei Health Kit against the real service, `setup.sh` on a clean machine and its Docker or Podman
 install step, the optional S3 providers other than Garage, and the GitHub Actions workflow. Real receipt photos have only
 been run through synthetic fixtures. Treat anything under "Not tested" as needing a first-run check.
 
