@@ -892,3 +892,58 @@ def test_the_research_service_answer_is_read_and_a_failure_is_explained(monkeypa
 
     asyncio.run(go())
     get_settings.cache_clear()
+
+
+# ---- GIFs and natural notices -----------------------------------------------------------------------------------------------------------
+
+
+def test_a_gif_marker_is_split_off_and_only_provider_domains_are_ever_sent():
+    from apa import gif
+
+    assert gif.split("Mantap! [[gif:https://media.giphy.com/media/abc/giphy.gif]]") == ("Mantap!", "https://media.giphy.com/media/abc/giphy.gif")
+    assert gif.split("Mantap!") == ("Mantap!", None)
+    assert gif.split("Hi [[gif:https://evil.example/x.gif]]") == ("Hi", None)  # not a provider: the marker is dropped
+    assert gif.split("Hi [[gif:http://media.giphy.com/x.gif]]") == ("Hi", None)  # https only
+    assert gif.allowed("https://media.tenor.com/x.gif") and not gif.allowed("https://giphy.com.evil.example/x.gif")
+    assert gif.clean_query("  cat   sleepy! ") == "cat sleepy" and gif.clean_query("1234567890") == "" and gif.clean_query(None) == ""
+
+
+def test_a_gif_is_found_on_giphy_with_the_strictest_rating_and_a_failure_is_just_no_gif(monkeypatch):
+    import asyncio
+
+    import httpx
+
+    from apa import gif
+    from apa.core.settings import get_settings
+
+    monkeypatch.setenv("GIPHY_API_KEY", "k")
+    get_settings.cache_clear()
+    seen = {}
+
+    def handler(req):
+        seen["url"] = str(req.url)
+        if "fail" in seen["url"]:
+            return httpx.Response(500)
+        return httpx.Response(200, json={"data": [{"images": {"original": {"url": "https://media.giphy.com/media/1/giphy.gif"}}},
+                                                  {"images": {"original": {"url": "https://evil.example/x.gif"}}}]})
+
+    async def go():
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+            assert await gif.search("celebrate", http) == "https://media.giphy.com/media/1/giphy.gif"
+            assert "rating=g" in seen["url"] and "q=celebrate" in seen["url"]
+            assert await gif.search("fail please", http) is None
+
+    asyncio.run(go())
+    monkeypatch.delenv("GIPHY_API_KEY")
+    get_settings.cache_clear()
+    assert not gif.enabled()
+
+
+def test_a_notice_rewrite_may_not_change_a_number_and_the_undo_link_is_kept():
+    from apa import natural
+
+    original = "✅ Dicatat: Kopi · Rp25.000 · Pos: Makan · Kasir: GoPay · ⚠ konsensus rendah · Undo: /undo_8f9a2b"
+    assert natural.kind_of(original) == "summary" and natural.kind_of("🚨 LOCKDOWN darurat") is None and natural.kind_of("\U0001F4F5 HP belum melapor 3 jam") == "phone"
+    body, flagged, token = natural.split_summary(original)
+    assert body == "Kopi · Rp25.000 · Pos: Makan · Kasir: GoPay" and flagged and token == "/undo_8f9a2b"
+    assert natural.keeps_numbers(body, "Kopi Rp25.000 udah kucatat di Makan") and not natural.keeps_numbers(body, "Kopi Rp52.000 udah kucatat")

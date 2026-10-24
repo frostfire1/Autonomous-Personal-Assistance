@@ -69,6 +69,9 @@ class Settings(BaseSettings):
     care_checkins: bool = True
     # The assistant starts a chat now and then (morning, midday, evening) and stops if not answered
     companion_chats: bool = True
+    # GIF reactions in the chat (one of these keys switches it on): developers.giphy.com or Tenor
+    giphy_api_key: str = ""
+    tenor_api_key: str = ""
     # Web research by GPT Researcher (RESEARCH_MODE=bundled starts it): address, seconds to wait, a day
     research_url: str = ""
     research_timeout_s: int = 900

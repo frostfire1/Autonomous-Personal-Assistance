@@ -63,8 +63,18 @@ class TelegramNotifier:
         self._chat_id = chat_id
 
     async def send(self, text: str) -> int | None:
+        from apa import gif
+
+        text, animation = gif.split(text)  # a reply may end with [[gif:URL]]: sent as an animation with the words as its caption
         rows = buttons_for(text)
         markup = keyboard(rows) if rows else None
+        if animation:
+            try:
+                message = await self._bot.send_animation(self._chat_id, animation, caption=text[:1000] or None, reply_markup=markup)
+                return message.message_id
+            except Exception as e:  # the link could not be fetched or shown: the words and the link still go out
+                log.warning("gif_send_failed", error=type(e).__name__)
+                text = f"{text}\n{animation}".strip()
         message = await self._bot.send_message(self._chat_id, text, reply_markup=markup)
         return message.message_id
 

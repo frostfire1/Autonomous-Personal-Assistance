@@ -985,3 +985,91 @@ async def test_research_is_queued_once_per_ask_limited_per_day_and_the_findings_
     monkeypatch.delenv("RESEARCH_URL")
     get_settings.cache_clear()
     assert "not set up" in await research.start(redis, "anything about sleep")
+
+
+async def test_notices_are_rewritten_like_a_friend_only_when_safe_and_the_chat_is_known(stack, redis):
+
+    from sqlalchemy import text as sql
+
+    from apa import natural
+    from apa.chat import agent
+
+    summary = "✅ Dicatat: Kopi · Rp25.000 · Pos: Makan · Kasir: GoPay · Undo: /undo_8f9a2b"
+    seen = []
+    answer = ["Oke, kopi Rp25.000 udah kucatat di Makan lewat GoPay ☕"]
+
+    class Llm:
+        async def complete(self, route, system, user, **kw):
+            seen.append((system, user))
+            if isinstance(answer[0], Exception):
+                raise answer[0]
+            return LLMResult(answer[0], "fake", 10, 10, 0)
+
+    class Inner:
+        def __init__(self):
+            self.sent = []
+
+        async def send(self, text):
+            self.sent.append(text)
+            return 7
+
+    inner = Inner()
+    notifier = natural.NaturalNotifier(inner, {"sessionmaker": stack, "llm": Llm(), "redis": redis})
+    assert await notifier.send(summary) == 7
+    assert inner.sent[-1] == "Oke, kopi Rp25.000 udah kucatat di Makan lewat GoPay ☕ · Undo: /undo_8f9a2b"  # the undo link survives: its button works
+    assert "RECENT CHAT" not in seen[-1][0] and "NOTICE:\nKopi · Rp25.000" in seen[-1][1]
+
+    # the owner is chatting right now: the model sees that conversation and the notice becomes part of it
+    ev = await raw_event(stack, "beli kopi dong", source="telegram_shorthand", status="skipped")
+    async with stack() as s:
+        await s.execute(sql("update inbound_events set received_at = now() - interval '2 minutes' where id = :i"), {"i": ev})
+        await s.commit()
+    await agent.remember(redis, "beli kopi dong", "Oke, mau yang mana?")
+    await notifier.send(summary)
+    assert "RECENT CHAT" in seen[-1][0] and "beli kopi dong" in seen[-1][0]
+
+    # a rewrite that changes an amount, invents a command, or fails: the original goes out untouched
+    for bad in ("Kopi Rp52.000 udah kucatat ya", "Kopi Rp25.000 udah dicatat, ketik /unlock", RuntimeError("down"), "ok"):
+        answer[0] = bad
+        await notifier.send(summary)
+        assert inner.sent[-1] == summary, bad
+    # other kinds of messages are never touched, and not even sent to the model
+    calls = len(seen)
+    for other in ("🚨 LOCKDOWN darurat: Kopi · Rp25.000", "Ringkasan pagi: ...", "⚠️ Debat tidak mencapai kuorum"):
+        await notifier.send(other)
+        assert inner.sent[-1] == other
+    assert len(seen) == calls
+    answer[0] = "Eh, HP-mu belum lapor 3 jam nih, buka APA sebentar ya."
+    await notifier.send("\U0001F4F5 HP belum melapor ke server sejak 3 jam. Buka aplikasi APA di HP.")
+    assert inner.sent[-1] == answer[0]
+
+
+async def test_the_telegram_notifier_sends_a_gif_as_an_animation_and_falls_back_to_words_and_link(stack):
+    from apa.integrations.notify import TelegramNotifier
+
+    class Msg:
+        message_id = 5
+
+    class Bot:
+        def __init__(self, fail):
+            self.fail, self.calls = fail, []
+
+        async def send_animation(self, chat, url, caption=None, reply_markup=None):
+            self.calls.append(("animation", url, caption))
+            if self.fail:
+                raise RuntimeError("cannot fetch")
+            return Msg()
+
+        async def send_message(self, chat, text, reply_markup=None):
+            self.calls.append(("message", text))
+            return Msg()
+
+    url = "https://media.giphy.com/media/1/giphy.gif"
+    ok = Bot(False)
+    assert await TelegramNotifier(ok, 1).send(f"Selamat ya! [[gif:{url}]]") == 5 and ok.calls == [("animation", url, "Selamat ya!")]
+    bad = Bot(True)
+    await TelegramNotifier(bad, 1).send(f"Selamat ya! [[gif:{url}]]")
+    assert bad.calls[-1] == ("message", f"Selamat ya!\n{url}")
+    plain = Bot(False)
+    await TelegramNotifier(plain, 1).send("Hi [[gif:https://evil.example/x.gif]]")
+    assert plain.calls == [("message", "Hi")]

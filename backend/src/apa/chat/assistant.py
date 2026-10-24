@@ -39,7 +39,10 @@ MEMORY_TOOL_DOC = """Memory tools (they take effect at once; then answer):
 - research {"topic": string}  look a topic up on the web (a few minutes; the findings with links arrive later as a message). Use it when
   the owner asks you to research or find out something you cannot answer from your data. The topic is a short general phrase with no
   personal data or numbers. Tell the owner it is started, in one short sentence.
-- research_last {}  the latest research report and its links, for a follow-up question"""
+- research_last {}  the latest research report and its links, for a follow-up question
+- gif {"query": string}  find a GIF for a few plain words ("celebrate", "cat sleepy"). Use it rarely, only when it truly fits the moment
+  (a celebration, a joke, comfort) and the owner's style is playful; never on money losses, health, security or other serious topics.
+  The result tells you the marker to add at the end of your reply."""
 
 SYSTEM = (
     "You are APA, the owner's personal assistant (money, health, news, security and plain conversation). Answer in the "
@@ -154,6 +157,12 @@ async def converse(
             result = await run_read(sm, tz, now, name, args)
             log.info("assistant_lookup", tool=name)
             transcript += [f"TOOL {name} {json.dumps(args, ensure_ascii=False)[:200]}", f"RESULT:\n{result}"]
+            continue
+        if name == "gif" and not final:
+            from apa import gif
+
+            result = await gif.tool(redis, args.get("query"))
+            transcript += [f"TOOL gif {json.dumps(args, ensure_ascii=False)[:120]}", f"RESULT:\n{result}"]
             continue
         if name in ("research", "research_last") and not final:
             from apa import research

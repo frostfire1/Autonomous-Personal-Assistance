@@ -541,7 +541,9 @@ async def startup(ctx: dict) -> None:
     if s.telegram_bot_token:
         from aiogram import Bot
 
-        ctx["notifier"] = TelegramNotifier(Bot(s.telegram_bot_token), s.telegram_owner_id)
+        from apa.natural import NaturalNotifier
+
+        ctx["notifier"] = NaturalNotifier(TelegramNotifier(Bot(s.telegram_bot_token), s.telegram_owner_id), ctx)  # notices read like a friend wrote them
     else:
         ctx["notifier"] = LogNotifier()  # no token: summaries and alerts only reach the log
 

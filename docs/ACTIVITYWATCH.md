@@ -106,3 +106,11 @@ Payments and their confirmation messages, the diary, learned items, notes and th
   A few minutes later the findings arrive in the chat, in your style, with the source links; the full report stays for a week for
   follow-up questions. Only the topic leaves (numbers and personal data are refused), the models are this app's own gateway, search is
   DuckDuckGo unless `TAVILY_API_KEY` is set, and `RESEARCH_PER_DAY` (5) limits the use. Embeddings use `GEMINI_API_KEY` (a small call).
+- **Notices like a friend wrote them:** payment confirmations ("✅ Dicatat: Kopi · Rp25.000 ...") and the warning that your phone stopped
+  reporting are rewritten into one short sentence in your style; when you are chatting at that moment, the assistant sees the conversation
+  and the notice flows into it. Every number must stay exactly the same, the Undo link is kept (its button still works), and a rewrite that
+  fails a check or takes more than 8 seconds is dropped: the original goes out. Alerts, lockdowns, held payments, digests and briefings
+  are never rewritten.
+- **GIFs** (`GIPHY_API_KEY` or `TENOR_API_KEY`): the assistant can answer with a GIF when it truly fits (a celebration, a joke, a bit of
+  comfort), never on money losses, health or security, at most 20 a day. Only links on Giphy's or Tenor's own domains are ever sent, with
+  the strictest content rating. Without a key it simply answers in words.
