@@ -163,11 +163,45 @@ def test_the_amount_always_comes_from_the_text_never_from_the_template():
     assert read([tpl()], "Transaksi kartu kredit Rp 1.500.000 di Apple ref 1 berhasil diproses", "w").amount == 1_500_000
 
 
-def test_a_template_needs_two_agreeing_examples_before_it_reads_anything():
-    from apa.ingestion.templates import read
+def test_a_template_reads_from_the_first_model_reading_on():
+    from apa.ingestion.templates import make_template, read
 
-    assert read([tpl(hits=1)], TOKO, "w") is None
-    assert read([tpl(hits=2)], TOKO, "w") is not None
+    first = make_template(NETFLIX, NETFLIX_PARSED)  # as learned: hits == 1, the model has read this wording once
+    assert first["hits"] == 1 and read([first], TOKO, "w") is not None  # the second notification needs no model
+    assert read([dict(first, bad=True)], TOKO, "w") is None  # a retired template is never used
+
+
+def test_nothing_is_learned_when_the_model_contradicts_clear_wording_in_the_text():
+    from apa.ingestion.templates import make_template
+
+    received = "Dana masuk Rp 50.000 ke rekening Anda dari transfer ANDI"
+    assert make_template(received, {"amount": "50000", "direction": "out", "merchant": "ANDI", "channel": None}) is None  # "dana masuk" is money in
+    assert make_template(received, {"amount": "50000", "direction": "in", "merchant": "ANDI", "channel": None}) is not None
+    paid = "Pembayaran QRIS Rp 18.000 ke KOPI KENANGAN berhasil"
+    assert make_template(paid, {"amount": "18000", "direction": "in", "merchant": "KOPI KENANGAN", "channel": "qris"}) is None
+
+
+def test_a_format_the_model_judged_not_a_transaction_is_skipped_without_asking_again():
+    from apa.ingestion.templates import SKIP, make_skip_template, read
+
+    moved = "Rp5.000 has been moved from your Main Pocket to your Holiday Pocket."
+    t = make_skip_template(moved)
+    assert t["dir"] == "skip" and read([t], "Rp75.000 has been moved from your Main Pocket to your Holiday Pocket.", "w") is SKIP
+    assert read([t], "Rp75.000 has been sent from your Main Pocket to your Holiday Pocket.", "w") is None  # other wording: asked again
+    assert make_skip_template("Rp 5.000") is None and make_skip_template(moved + " Also Rp7.000 more.") is None  # two amounts, or too little wording
+
+
+def test_templates_follow_the_home_currency(home_currency):
+    from decimal import Decimal
+
+    from apa.ingestion.templates import make_template, read
+
+    home_currency("USD")
+    text = "You paid $12.50 at Starbucks with your debit card ending today"
+    t = make_template(text, {"amount": "12.50", "direction": "out", "merchant": "Starbucks", "channel": "debit"})
+    assert t is not None
+    p = read([t], "You paid $7.25 at Peets with your debit card ending today", "w")
+    assert p.amount == Decimal("7.25") and p.merchant == "Peets" and p.direction == "out"
 
 
 @pytest.mark.parametrize("text", [
@@ -329,3 +363,12 @@ def test_money_moved_between_your_own_pockets_is_recognised_and_a_real_receipt_i
     assert classify_skip("Rp50.000 dipindahkan dari kantong Utama ke kantong Liburan") == "own_pocket_move"
     assert classify_skip("You've received Rp200.000 from GoPay. Need help? Contact Tanya Jago at 1500 746.") is None
     assert classify_skip("Transfer ke ANDI Rp 50.000 berhasil") is None  # a real transfer out is still a transaction
+
+
+def test_the_merchant_is_never_the_banks_help_line_or_a_number():
+    from apa.ingestion.bank_parser import parse_notification
+
+    got = parse_notification("com.jago.digitalBanking", "You've received Rp50.500 from GoPay. Need help? Contact Tanya Jago at 1500 746.")
+    assert got is not None and got.merchant == "GoPay" and got.direction == "in"
+    got = parse_notification("com.bca", "Pembayaran QRIS Rp18.000 ke KOPI KENANGAN berhasil. Butuh bantuan? Hubungi Halo BCA di 1500888.")
+    assert got is not None and got.merchant == "KOPI KENANGAN"

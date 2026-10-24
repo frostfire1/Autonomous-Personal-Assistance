@@ -158,6 +158,7 @@ class SettingsActivity : ComponentActivity() {
         button("Play full briefing") { BriefingService.start(this, "full", "manual") }
         label("Background: keep the app running when closed")
         bgStatus = TextView(this).also(col::addView)
+        button("Send queued notifications now") { sendQueuedNow() }
         button("Turn off battery saving for APA") { requestBatteryExemption() }
         button("Open autostart settings (${android.os.Build.MANUFACTURER})") { openVendorSettings() }
         button("Re-link notification listener") { rebindListener() }
@@ -234,7 +235,12 @@ class SettingsActivity : ComponentActivity() {
         val pm = getSystemService(POWER_SERVICE) as PowerManager
         val listener = NotificationManagerCompat.getEnabledListenerPackages(this).contains(packageName)
         val notify = NotificationManagerCompat.from(this).areNotificationsEnabled()
-        return listOf(
+        val waiting = Outbox(this).pendingCount()
+        val queue = if (waiting > 0) listOf(
+            BackgroundHelp.Check("$waiting notifications waiting to be sent", false,
+                "the server could not be reached: connect the VPN (Tailscale) or the home Wi-Fi; they are sent automatically"),
+        ) else emptyList()
+        return queue + listOf(
             BackgroundHelp.Check("Notification access (reads bank notifications)", listener, "without this, bank notifications are not read"),
             BackgroundHelp.Check("Notification listener connected", cfg.listenerUp,
                 "Android stopped the app: turn Autostart on and press Re-link notification listener"),
@@ -242,6 +248,19 @@ class SettingsActivity : ComponentActivity() {
             BackgroundHelp.Check("Battery saving turned off for APA", pm.isIgnoringBatteryOptimizations(packageName),
                 "the phone may freeze the app and the queue will not be sent"),
         )
+    }
+
+    private fun sendQueuedNow() {
+        val before = Outbox(this).pendingCount()
+        SyncWorker.enqueue(this)
+        status.text = "$before waiting. Sending..."
+        lifecycleScope.launch {
+            kotlinx.coroutines.delay(6000)
+            val left = Outbox(this@SettingsActivity).pendingCount()
+            status.text = "$before were waiting, $left remain."
+            refresh()
+            status.text = "$before were waiting, $left remain.\n" + status.text
+        }
     }
 
     private fun requestBatteryExemption() {

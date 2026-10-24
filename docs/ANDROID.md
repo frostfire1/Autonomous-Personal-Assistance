@@ -46,6 +46,21 @@ for each requirement and buttons for: switching battery optimisation off for APA
 re-binding the notification listener, the resend interval (15 to 120 minutes) and "Wi-Fi only". Nothing is lost while the phone
 is offline or frozen: the buffer waits and is resent with the same idempotency keys.
 
+## Away from home: Tailscale or WireGuard
+
+The server is only reachable on your home network or through a VPN, so away from home the phone must be on the VPN (Tailscale or
+WireGuard) and the **Server** field must hold the server's VPN address (Tailscale: its `100.x.y.z` address or MagicDNS name, for example
+`http://apa-server:8000`).
+
+**Nothing is lost when the VPN is down.** Every bank notification is saved on the phone first (a local queue) and sent when the server can
+be reached. The queue survives a restart of the app or the phone, and a resend is harmless because every notification has a unique key.
+After a failed attempt the app tries again every 5 minutes, and immediately when the phone's network or VPN connects again. The settings
+screen shows how many notifications are waiting and has a **Send queued notifications now** button.
+
+Tips so the VPN does not drop quietly: keep Tailscale on **always**, exclude Tailscale from battery optimisation (and on Xiaomi switch its
+Autostart on too), and use the same server address on and off the home network by using the Tailscale name instead of the `192.168.x.x` address.
+If the phone has not reached the server for 4 hours, the server tells you in Telegram (the message comes from the server, so it works even though the phone is cut off).
+
 ## When something is not recorded, Telegram tells you
 
 - **A notification that did not become a ledger entry** (for example "moved between your own pockets", or wording the system could not read) is

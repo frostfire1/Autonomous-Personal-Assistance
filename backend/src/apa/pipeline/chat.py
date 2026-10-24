@@ -4,7 +4,8 @@ Same claim / call-outside-the-transaction / re-lock-and-write shape as the other
 or two racing workers send one answer."""
 
 import asyncio
-from datetime import datetime
+import re
+from datetime import datetime, timedelta
 from typing import Any
 from zoneinfo import ZoneInfo
 
@@ -18,6 +19,7 @@ from apa.chat.snapshot import finance_snapshot, health_snapshot
 from apa.core.logging import get_logger
 from apa.core.sanitize import sanitize_untrusted
 from apa.core.settings import get_settings
+from apa.db.models.ledger import Transaction
 from apa.db.models.ops import InboundEvent, TelegramMessage
 from apa.ingestion.llm_extract import LLMUnavailable
 from apa.integrations.llm import LLMClient
@@ -152,6 +154,7 @@ async def run_master(
         if ev.status != "needs_llm" or ev.source != "telegram_shorthand" or ev.payload.get("master_done"):
             return "skipped"
         text, sent_raw, received = ev.payload.get("text", ""), ev.payload.get("sent_at"), ev.received_at
+        reply_to = ev.payload.get("reply_to")
     sent_at = datetime.fromisoformat(sent_raw) if sent_raw else received
 
     clean = sanitize_untrusted(text)
@@ -166,7 +169,7 @@ async def run_master(
         custom = cfg.active_custom() if cfg is not None else {}
         p = await master.plan(llm, clean.text, history, has_draft=draft is not None, custom=custom)
         tokens = p.tokens
-        reply, role = await _execute(sm, llm, redis, p, clean.text, history, draft, tz, sent_at, custom)
+        reply, role = await _execute(sm, llm, redis, p, clean.text, history, draft, tz, sent_at, custom, reply_to)
     except LLM_ERRORS as e:
         if job_try < max_tries:
             raise LLMUnavailable(str(e)) from e
@@ -186,12 +189,39 @@ async def run_master(
     return "answered" if ok else "skipped"
 
 
+async def _described_transaction(sm, reply_to: int | None, sent_at: datetime) -> int | None:
+    """The transaction a no-amount message is about: the one whose Telegram message the owner replied to, else the
+    latest committed one of the last hour."""
+    async with sm() as s:
+        if reply_to is not None:
+            tx = (await s.execute(
+                select(TelegramMessage.transaction_id).where(
+                    TelegramMessage.message_id == reply_to, TelegramMessage.transaction_id.is_not(None))
+            )).scalar_one_or_none()
+            if tx is not None:
+                return tx
+        return (await s.execute(
+            select(Transaction.id).where(
+                Transaction.status == "committed", Transaction.timestamp >= sent_at - timedelta(hours=1),
+                Transaction.timestamp <= sent_at + timedelta(minutes=5)).order_by(Transaction.timestamp.desc()).limit(1)
+        )).scalar_one_or_none()
+
+
 async def _execute(
     sm, llm, redis, p: master.Plan, text: str, history: list[dict], draft, tz: ZoneInfo, sent_at: datetime,
     custom: dict | None = None,
+    reply_to: int | None = None,
 ) -> tuple[str | None, str]:
     """(reply, role); reply None = hand the message to the payment extractor."""
     if p.intent == "transaction":
+        if not re.search(r"\d", text):  # no amount: this describes a payment already recorded, it is not a new one
+            tx = await _described_transaction(sm, reply_to, sent_at)
+            if tx is not None:
+                hint = (f"[The owner is describing transaction #{tx} (the one they replied to, or their latest). Propose "
+                        f"edit_transaction on #{tx} with the merchant, category or notes they describe; do not add a new "
+                        f"transaction.] {text}")
+                reply, _ = await plan_action(sm, llm, hint, history, tz, redis)
+                return reply, "action"
         return None, "transaction"
     if p.intent == "batch":
         items = await batch_flow.items_from_model(llm, text, sent_at, tz)

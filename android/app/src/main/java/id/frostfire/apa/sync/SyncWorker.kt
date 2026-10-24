@@ -38,12 +38,16 @@ class SyncWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(ctx, 
             val r = try {
                 api.postNotification(row.key, row.pkg, row.title, row.text, row.postedAt)
             } catch (e: Exception) {
-                return Result.retry()  // no network or the server is down: try again with backoff
+                enqueueRetry(applicationContext)  // server unreachable (VPN down?): fixed short delay, not exponential backoff
+                return Result.success()
             }
             when {
                 r.ok -> outbox.markSent(row.id)
                 r.code in 400..499 && r.code != 429 -> outbox.markSent(row.id)  // the server refused it for good (bad data / key)
-                else -> return Result.retry()
+                else -> {
+                    enqueueRetry(applicationContext)
+                    return Result.success()
+                }
             }
         }
         outbox.purgeSentOlderThan(TimeUnit.DAYS.toMillis(7))
@@ -62,6 +66,7 @@ class SyncWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(ctx, 
 
     companion object {
         private const val NOW = "apa-sync-now"
+        private const val RETRY = "apa-sync-retry"
         private const val PERIODIC = "apa-sync-periodic"
         private fun online(ctx: Context): Constraints = Constraints.Builder()
             .setRequiredNetworkType(if (Config(ctx).syncWifiOnly) NetworkType.UNMETERED else NetworkType.CONNECTED).build()
@@ -70,6 +75,13 @@ class SyncWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(ctx, 
             val req = OneTimeWorkRequestBuilder<SyncWorker>()
                 .setConstraints(online(ctx)).setBackoffCriteria(BackoffPolicy.EXPONENTIAL, 30, TimeUnit.SECONDS).build()
             WorkManager.getInstance(ctx).enqueueUniqueWork(NOW, ExistingWorkPolicy.APPEND_OR_REPLACE, req)
+        }
+
+        /** One-time retry after a fixed delay (replaces any pending retry). */
+        fun enqueueRetry(ctx: Context, minutes: Long = 5) {
+            val req = OneTimeWorkRequestBuilder<SyncWorker>()
+                .setConstraints(online(ctx)).setInitialDelay(minutes, TimeUnit.MINUTES).build()
+            WorkManager.getInstance(ctx).enqueueUniqueWork(RETRY, ExistingWorkPolicy.REPLACE, req)
         }
 
         /** A safety net: even if a trigger is missed, the buffer is flushed on the owner's chosen interval while online. */

@@ -249,12 +249,10 @@ async def _model_read(stack, text, package="com.bca", **over):
     return learned
 
 
-async def test_wording_the_model_read_twice_is_then_read_by_the_rules_with_no_model_call(stack, worker_env):
+async def test_wording_the_model_read_once_is_then_read_by_the_rules_with_no_model_call(stack, worker_env):
     worker, ctx, redis = worker_env
     assert (await _notify(stack, worker, ctx, unusual()))[0] == "needs_llm"  # nothing known yet: the model's turn
-    await _model_read(stack, unusual())
-    assert (await _notify(stack, worker, ctx, unusual("99.000", "Alfamart", "1")))[0] == "needs_llm"  # one example is not enough
-    await _model_read(stack, unusual("99.000", "Alfamart", "1"), amount="99000", merchant="Alfamart")
+    await _model_read(stack, unusual())  # the model read it once: the wording is remembered
     before = len([j for j in redis.jobs if j[0] == "extract_event"])
     status, payload = await _notify(stack, worker, ctx, unusual("120.500", "Tokopedia", "9932"))
     assert status == "parsed" and payload["parsed_by"] == "template"
@@ -323,3 +321,18 @@ async def test_a_learning_failure_never_blocks_the_payment(stack, monkeypatch):
     monkeypatch.setattr(extract_mod.templates, "learn", boom)
     eid = await raw_event(stack, unusual(), source="android_listener", package="com.bca", status="needs_llm")
     assert await extract_mod.run_extract(stack, None, FakeNotifier(), None, eid) == "parsed"
+
+
+async def test_a_format_the_model_judged_not_a_transaction_is_then_skipped_without_the_model(stack, worker_env):
+    from apa.ingestion import templates
+
+    worker, ctx, redis = worker_env
+    text = "Rp5.000 telah dialihkan dari Tabungan Utama ke Tabungan Liburan milik Anda"
+    assert (await _notify(stack, worker, ctx, text))[0] == "needs_llm"  # unknown wording: the model decides once
+    async with stack() as s:
+        assert await templates.learn(s, "com.bca", text, None)  # ... and said: not a transaction
+        await s.commit()
+    before = len([j for j in redis.jobs if j[0] == "extract_event"])
+    status, payload = await _notify(stack, worker, ctx, text.replace("5.000", "75.000"))
+    assert status == "skipped" and payload["skip_reason"] == "learned_skip"
+    assert len([j for j in redis.jobs if j[0] == "extract_event"]) == before  # the model was not asked this time

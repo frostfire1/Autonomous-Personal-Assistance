@@ -93,6 +93,9 @@ _MERCHANT = re.compile(
     r"(?=\s+(?:Rp|IDR|sebesar|pada|tgl|tanggal|ref|no\.?|berhasil|via|dengan|senilai|\d{1,2}[/-]\d{1,2})|[.,;\n]|$)"
 )
 
+# The tail of a bank message that is about the bank, not the payment: "Need help? Contact Tanya Jago at 1500 746."
+_BOILERPLATE = re.compile(r"(?is)\b(?:need\s+help|butuh\s+bantuan|ada\s+kendala|hubungi|contact\s+us|contact)\b.*$")
+
 _CHANNELS = [
     ("qris", re.compile(r"\bqris\b", re.I)),
     ("bi_fast", re.compile(r"\bbi[\s-]?fast\b", re.I)),
@@ -170,8 +173,10 @@ def parse_notification(package: str, text: str, wallets: dict[str, str] | None =
     direction = "out" if is_out else "in"
 
     channel = next((name for name, pat in _CHANNELS if pat.search(text)), None)
-    merchant_m = _MERCHANT.search(text)
+    merchant_m = _MERCHANT.search(_BOILERPLATE.sub("", text))
     merchant = merchant_m.group("m").strip(" .-") if merchant_m else None
+    if merchant is not None and not re.search(r"[A-Za-z]", merchant):
+        merchant = None  # a phone number or an id is never a shop
 
     fee = None
     fm = _FEE.search(text)

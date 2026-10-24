@@ -145,7 +145,7 @@ async def test_a_bank_notification_that_is_not_a_transaction_never_reaches_chat(
     assert q.jobs == []
 
 
-async def test_an_unreadable_bank_notification_is_dropped_silently(stack):
+async def test_an_unreadable_bank_notification_is_not_recorded_but_the_owner_is_told(stack):
     notifier = FakeNotifier()
     ctx = make_ctx(stack, FlowLLM(extraction(amount=75000, confidence=0.4)), notifier)
     eid = await raw_event(stack, "Rp 75.000 untuk langganan bulanan Anda", source="android_listener",
@@ -153,7 +153,8 @@ async def test_an_unreadable_bank_notification_is_dropped_silently(stack):
     assert await worker.extract_event(ctx, eid) == "needs_review"
     ev = await event(stack, eid)
     assert ev.payload["review_reason"] == "low_confidence" and ev.payload["extraction"]["tokens"] == 160
-    assert notifier.sent == [] and await replies(stack) == [] and await rows(stack, Transaction) == []
+    assert await rows(stack, Transaction) == []  # nothing is recorded on a guess ...
+    assert len(notifier.sent) == 1 and "Tidak saya catat: kurang yakin" in notifier.sent[0] and len(await replies(stack)) == 1  # ... but never silently
 
 
 # ---- LLM outage ---------------------------------------------------------------------------------------------------

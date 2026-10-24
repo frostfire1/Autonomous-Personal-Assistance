@@ -104,6 +104,8 @@ async def process_inbound_event(ctx: dict, event_id: int) -> str:
             parsed = None if skip else parse_notification(package, text, wallets)
             if parsed is None and not skip:  # wording the fixed rules do not know: a template learned from the model?
                 parsed = await templates.apply(session, package, text, wallets)
+                if parsed is templates.SKIP:  # a format the model once judged not a transaction: skipped without asking again
+                    parsed, skip = None, "learned_skip"
                 via_template = parsed is not None
 
         if batch_items:
