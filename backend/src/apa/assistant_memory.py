@@ -303,7 +303,14 @@ async def add_watch(sm: async_sessionmaker, by_day: dict[date, list[dict]]) -> i
 
 async def replace_api_watch(sm: async_sessionmaker, day: date, items: list[dict]) -> int:
     """Replace what the YouTube account sync stored earlier (liked videos, subscriptions). -> items stored."""
-    rows = [_row(WATCH, json.dumps(i, ensure_ascii=False), day=day, source="api", shared=False) for i in items]
+    rows = []
+    for i in items:  # an item may carry the day it happened ("d"); the others are dated with the day of the sync
+        i = dict(i)
+        try:
+            when = date.fromisoformat(i.pop("d")) if "d" in i else day
+        except ValueError:
+            when = day
+        rows.append(_row(WATCH, json.dumps(i, ensure_ascii=False), day=when, source="api", shared=False))
     async with sm() as s:
         await s.execute(delete(MemoryItem).where(MemoryItem.kind == WATCH, MemoryItem.source == "api"))
         s.add_all(rows)

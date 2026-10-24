@@ -725,3 +725,15 @@ def test_connecting_youtube_needs_credentials_and_reports_pending_until_the_code
     get_settings.cache_clear()
     asyncio.run(run())
     get_settings.cache_clear()
+
+
+def test_the_activity_feed_dates_likes_and_replaces_the_undated_copy():
+    from apa import youtube_api
+
+    liked = [{"snippet": {"title": "Belajar python", "channelTitle": "Kelas Kode"}}, {"snippet": {"title": "Lagu santai", "channelTitle": "Musik"}}]
+    acts = [{"snippet": {"type": "like", "title": "Belajar python", "publishedAt": "2026-03-02T10:00:00Z", "channelTitle": "ME"}},
+            {"snippet": {"type": "playlistItem", "title": "Resep", "publishedAt": "2026-03-03T10:00:00Z"}},
+            {"snippet": {"type": "subscription", "title": "ignored", "publishedAt": "2026-03-03T10:00:00Z"}}, {"snippet": {"type": "like"}}]
+    items = youtube_api.shape(liked, [], acts)
+    assert items == [{"k": "liked", "c": "Kelas Kode", "t": "Belajar python", "d": "2026-03-02"},
+                     {"k": "saved", "c": "", "t": "Resep", "d": "2026-03-03"}, {"k": "liked", "c": "Musik", "t": "Lagu santai"}]

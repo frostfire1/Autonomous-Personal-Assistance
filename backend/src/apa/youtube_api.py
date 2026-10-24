@@ -26,6 +26,7 @@ TOKEN_URL = "https://oauth2.googleapis.com/token"
 API = "https://www.googleapis.com/youtube/v3"
 MAX_LIKED_PAGES = 4  # 200 videos
 MAX_SUB_PAGES = 6  # 300 channels
+MAX_ACTIVITY_PAGES = 4  # 200 recent actions (likes, saves, uploads) with their dates
 
 
 class YouTubeError(Exception):
@@ -129,12 +130,26 @@ async def _pages(http: httpx.AsyncClient, token: str, path: str, params: dict, p
     return items
 
 
-def shape(liked: list[dict], subs: list[dict]) -> list[dict]:
-    """The stored items: {"k": "liked", "c": channel, "t": title} and {"k": "subscribed", "c": channel name, "t": ""}."""
+ACTIVITY_KINDS = {"like": "liked", "favorite": "liked", "playlistItem": "saved", "upload": "uploaded"}
+
+
+def shape(liked: list[dict], subs: list[dict], acts: list[dict] | None = None) -> list[dict]:
+    """The stored items: {"k": "liked", "c": channel, "t": title}, {"k": "subscribed", "c": channel name, "t": ""} and, from the
+    account's activity feed, the same liked/saved/uploaded videos with the day they happened ("d"). A liked video that the
+    feed dates replaces the undated one (the feed names the acting channel, so the video's channel comes from the likes list)."""
     out = []
+    dated = []
+    channel_of = {" ".join(str((v.get("snippet") or {}).get("title", "")).split())[:140]: " ".join(str((v.get("snippet") or {}).get("channelTitle", "")).split())[:60] for v in liked}
+    for a in acts or []:
+        sn = a.get("snippet") or {}
+        kind, title, day = ACTIVITY_KINDS.get(sn.get("type")), " ".join(str(sn.get("title", "")).split())[:140], str(sn.get("publishedAt", ""))[:10]
+        if kind and title and len(day) == 10:
+            dated.append({"k": kind, "c": channel_of.get(title, ""), "t": title, "d": day})
+    dated_titles = {d["t"] for d in dated if d["k"] == "liked"}
+    out += dated
     for v in liked:
         sn = v.get("snippet") or {}
-        if sn.get("title"):
+        if sn.get("title") and " ".join(sn["title"].split())[:140] not in dated_titles:
             out.append({"k": "liked", "c": " ".join(str(sn.get("channelTitle", "")).split())[:60], "t": " ".join(sn["title"].split())[:140]})
     for c in subs:
         if t := " ".join(str((c.get("snippet") or {}).get("title", "")).split())[:60]:
@@ -149,4 +164,5 @@ async def sync(sm: async_sessionmaker, http: httpx.AsyncClient, today: date) -> 
     token = await _token(sm, http)
     liked = await _pages(http, token, "videos", {"part": "snippet", "myRating": "like"}, MAX_LIKED_PAGES)
     subs = await _pages(http, token, "subscriptions", {"part": "snippet", "mine": "true"}, MAX_SUB_PAGES)
-    return await assistant_memory.replace_api_watch(sm, today, shape(liked, subs))
+    acts = await _pages(http, token, "activities", {"part": "snippet,contentDetails", "mine": "true"}, MAX_ACTIVITY_PAGES)
+    return await assistant_memory.replace_api_watch(sm, today, shape(liked, subs, acts))

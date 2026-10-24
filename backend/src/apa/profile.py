@@ -211,7 +211,7 @@ def usage_trait(rows: list[tuple[date, str, str, str, int, datetime | None]], tz
 def watch_trait(items: list[tuple[str, str, str]]) -> Trait | None:
     """What the owner watches and searches on YouTube: (kind, channel, title) from their Takeout export."""
     watched = [(c, t) for k, c, t in items if k == "watched"]
-    liked = [(c, t) for k, c, t in items if k == "liked"]
+    liked = [(c, t) for k, c, t in items if k in ("liked", "saved")]
     subs = [c for k, c, _ in items if k == "subscribed"]
     if len(watched) < 10 and len(liked) < 5 and len(subs) < 5:
         return None
