@@ -169,6 +169,7 @@ web() {
   rmc web
   $CE run -d --name web --network $NET --restart unless-stopped -p "$WEB_PORT:3000" $WEB_IMG >/dev/null
   status
+$CE image prune -f >/dev/null 2>&1 || true  # every build leaves the previous image behind (about 850 MB each): drop the unused ones
   echo "dashboard: http://$(hostname -I 2>/dev/null | awk '{print $1}' || echo localhost):$WEB_PORT (sign in with INGEST_API_KEY from .env)"
 }
 
