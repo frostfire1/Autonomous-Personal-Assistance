@@ -217,6 +217,12 @@ _CONFIRMED = re.compile(
 )
 
 
+# Jago and similar banks: money moved between the owner's OWN pockets is neither spending nor income.
+_OWN_MOVE = re.compile(
+    r"\b(?:moved|dipindahkan|pindah)\b.{0,80}\b(?:pockets?|kantong|saku)\b", re.I | re.S
+)
+
+
 def classify_skip(text: str) -> str | None:
     """Reason a notification must not become a transaction, else None."""
     if _OTP_WORDS.search(text):
@@ -225,6 +231,8 @@ def classify_skip(text: str) -> str | None:
         return "failed_or_cancelled"
     if not _AMOUNT.search(text):
         return "no_amount"
+    if _OWN_MOVE.search(text):
+        return "own_pocket_move"
     confirmed = bool(_CONFIRMED.search(text))
     if _OFFER_AMOUNT.search(text):
         return "promo"  # a ceiling or a starting price is an offer even beside a confirmed payment

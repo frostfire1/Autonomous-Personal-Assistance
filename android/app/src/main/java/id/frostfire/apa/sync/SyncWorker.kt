@@ -1,6 +1,10 @@
 package id.frostfire.apa.sync
 
+import android.content.ComponentName
 import android.content.Context
+import android.service.notification.NotificationListenerService
+import androidx.core.app.NotificationManagerCompat
+import id.frostfire.apa.listener.BankNotificationListener
 import androidx.work.BackoffPolicy
 import androidx.work.Constraints
 import androidx.work.CoroutineWorker
@@ -23,6 +27,13 @@ class SyncWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(ctx, 
         if (!cfg.configured()) return Result.success()  // nothing to send to yet; the rows wait in the buffer
         val outbox = Outbox(applicationContext)
         val api = Api(cfg)
+        runCatching { healListener(cfg) }
+        runCatching {
+            val version = runCatching {
+                applicationContext.packageManager.getPackageInfo(applicationContext.packageName, 0).versionName
+            }.getOrNull() ?: "0.2.0"
+            api.heartbeat(cfg.listenerUp, outbox.pendingCount(), version)
+        }
         for (row in outbox.pending()) {
             val r = try {
                 api.postNotification(row.key, row.pkg, row.title, row.text, row.postedAt)
@@ -37,6 +48,16 @@ class SyncWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(ctx, 
         }
         outbox.purgeSentOlderThan(TimeUnit.DAYS.toMillis(7))
         return Result.success()
+    }
+
+    /** Access is granted but the OS has no live connection (or no record for a day): ask it to bind the service again. */
+    private fun healListener(cfg: Config) {
+        val granted = NotificationManagerCompat.getEnabledListenerPackages(applicationContext).contains(applicationContext.packageName)
+        if (!granted) return
+        val stale = System.currentTimeMillis() - cfg.listenerAt > TimeUnit.HOURS.toMillis(24)
+        if (!cfg.listenerUp || stale) {
+            NotificationListenerService.requestRebind(ComponentName(applicationContext, BankNotificationListener::class.java))
+        }
     }
 
     companion object {

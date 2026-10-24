@@ -320,3 +320,12 @@ def test_english_promotions_codes_and_reminders_are_skipped_but_real_payments_ar
         assert classify_skip(text) == why, text
     assert classify_skip("You paid $12.50 at Starbucks. Earn rewards points!") is None  # a confirmed payment outweighs the promo word
     assert classify_skip("Payment of $12.50 to ACME was successful") is None
+
+
+def test_money_moved_between_your_own_pockets_is_recognised_and_a_real_receipt_is_not():
+    from apa.ingestion.bank_parser import classify_skip
+
+    assert classify_skip("Rp5.000 has been moved from your Main Pocket Pocket to your visa joe Pocket.") == "own_pocket_move"
+    assert classify_skip("Rp50.000 dipindahkan dari kantong Utama ke kantong Liburan") == "own_pocket_move"
+    assert classify_skip("You've received Rp200.000 from GoPay. Need help? Contact Tanya Jago at 1500 746.") is None
+    assert classify_skip("Transfer ke ANDI Rp 50.000 berhasil") is None  # a real transfer out is still a transaction

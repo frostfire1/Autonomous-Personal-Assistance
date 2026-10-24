@@ -23,7 +23,7 @@ from apa.ingestion.packages import approved_wallets
 from apa.integrations.llm import LLMClient
 from apa.integrations.notify import Notifier
 from apa.pipeline.chat import chat_eligible
-from apa.pipeline.commit import send_and_record
+from apa.pipeline.commit import record_reply, send_and_record
 
 log = get_logger(__name__)
 
@@ -43,6 +43,47 @@ def build_reply(text: str, reason: str) -> str:
     Telegram entries: a bank notification we cannot read is not worth a ping."""
     why = _REASON_ID.get(reason, reason)
     return f"❓ Belum bisa mencatat «{text[:80]}» ({why}). Coba tulis seperti: kopi susu 18k tunai"
+
+
+# Why a bank notification was not recorded, in the words the owner reads. The owner is told about these so money is never
+# lost silently; noise (codes, promotions, reminders, failures, no amount) is not worth a message.
+_NOTICE_WHY = {
+    "own_pocket_move": "dipindahkan antar kantong milikmu sendiri, bukan pengeluaran atau pemasukan",
+    "llm_not_a_transaction": "tidak terbaca sebagai transaksi",
+    "low_confidence": "kurang yakin",
+    "amount_not_in_text": "nominal tidak cocok dengan teks",
+    "fee_not_in_text": "biaya tidak cocok dengan teks",
+    "no_digits_in_text": "nominal tidak terbaca",
+    "invalid_output": "tidak bisa dipahami",
+    "llm_unavailable": "layanan AI sedang tidak tersedia",
+    "flood_guard": "terlalu banyak notifikasi tak dikenal dalam satu jam",
+    "unknown_package": "aplikasinya belum disetujui di server",
+}
+NOTICES_PER_HOUR = 6
+
+
+async def notify_unrecorded(sm: async_sessionmaker, notifier: Notifier, event_id: int, package: str, text: str, reason: str) -> bool:
+    """A Telegram line for a bank notification that did not become a ledger entry, when it is not plain noise. At most
+    NOTICES_PER_HOUR an hour, so a burst cannot flood the chat. -> whether one was sent."""
+    why = _NOTICE_WHY.get(reason)
+    if why is None:
+        return False
+    from datetime import timedelta
+
+    from sqlalchemy import func
+
+    async with sm() as s:
+        recent = (await s.execute(
+            select(func.count()).select_from(TelegramMessage).where(
+                TelegramMessage.kind == "reply", TelegramMessage.body.like("\U0001F4F1%"),
+                TelegramMessage.created_at >= datetime.now(UTC) - timedelta(hours=1))
+        )).scalar_one()
+    if recent >= NOTICES_PER_HOUR:
+        return False
+    body = " ".join(text.split())[:140]
+    ask = "" if reason == "own_pocket_move" else " Kalau ini transaksi sungguhan, ketik seperti: kopi susu 18k tunai"
+    await record_reply(sm, notifier, f"\U0001F4F1 {package.rsplit('.', 1)[-1]}: «{body}»\nTidak saya catat: {why}.{ask}", event_id=event_id)
+    return True
 
 
 async def _locked(s: AsyncSession, event_id: int) -> InboundEvent | None:
@@ -127,4 +168,6 @@ async def run_extract(
         await enqueuer.enqueue_job("chat_event", event_id)
     if reply_id is not None:
         await send_and_record(sm, notifier, reply_id, reply)
+    if source == "android_listener" and result.status in ("skipped", "needs_review"):
+        await notify_unrecorded(sm, notifier, event_id, package, text, result.reason or "invalid_output")
     return result.status

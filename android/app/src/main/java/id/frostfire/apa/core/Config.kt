@@ -65,6 +65,16 @@ class Config(context: Context) {
         get() = p.getBoolean("on_bluetooth", false)
         set(v) = p.edit().putBoolean("on_bluetooth", v).apply()
 
+    /** Whether the OS currently has the notification listener connected (a hint, set by the service itself). */
+    var listenerUp: Boolean
+        get() = p.getBoolean("listener_up", false)
+        set(v) = p.edit().putBoolean("listener_up", v).apply()
+
+    /** When the listener last connected or disconnected (epoch millis, 0 = never). */
+    var listenerAt: Long
+        get() = p.getLong("listener_at", 0L)
+        set(v) = p.edit().putLong("listener_at", v).apply()
+
     val deviceId: String
         get() = p.getString("device_id", null) ?: UUID.randomUUID().toString().also {
             p.edit().putString("device_id", it).apply()

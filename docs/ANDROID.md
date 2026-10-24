@@ -42,6 +42,16 @@ for each requirement and buttons for: switching battery optimisation off for APA
 re-binding the notification listener, the resend interval (15 to 120 minutes) and "Wi-Fi only". Nothing is lost while the phone
 is offline or frozen: the buffer waits and is resent with the same idempotency keys.
 
+## When something is not recorded, Telegram tells you
+
+- **A notification that did not become a ledger entry** (for example "moved between your own pockets", or wording the system could not read) is
+  sent to Telegram with the reason, and how to enter it by hand if it was a real payment. Noise (one-time codes, promotions, reminders,
+  failures) is not reported. At most 6 such messages an hour.
+- **The phone stops collecting:** the app checks in with the server (every sync, and whenever you open it). If it has been silent for 4
+  hours, or its notification listener is disconnected, Telegram says so (at most once per 12 hours). The app also tries to re-link the
+  listener itself. On Xiaomi, Oppo, Vivo and similar phones the usual fix is to switch **Autostart** on for APA and set battery to
+  **No restrictions**; the settings screen has buttons for both.
+
 ## Security
 
 - The key is stored encrypted with a hardware-backed key. Optional request signing: set `INGEST_HMAC_SECRET` on the server and enter the same secret in the app.
