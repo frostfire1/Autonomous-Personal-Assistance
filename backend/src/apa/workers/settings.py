@@ -404,6 +404,20 @@ async def care_checkin(ctx: dict) -> str:
         return "failed"
 
 
+async def companion_chat(ctx: dict) -> str:
+    """The assistant starts a conversation now and then (see apa.companion). Quiet unless it has something real to say."""
+    from apa import companion
+
+    if not get_settings().companion_chats or ctx.get("redis") is None or ctx.get("notifier") is None or ctx.get("llm") is None:
+        return "off"
+    tz = ZoneInfo(get_settings().timezone)
+    try:
+        return await companion.run(ctx.get("sessionmaker", SessionLocal), ctx["llm"], ctx["redis"], ctx["notifier"], tz, datetime.now(tz))
+    except Exception as exc:
+        log.warning("companion_failed", error=type(exc).__name__)
+        return "failed"
+
+
 async def memory_digest(ctx: dict) -> str:
     """Each night the assistant writes the day's diary entry from the day's chat (nothing when there was little to say)."""
     from apa import assistant_memory
@@ -519,13 +533,14 @@ class WorkerSettings:
     max_tries = COMMIT_MAX_TRIES
     functions = [
         process_inbound_event, commit_event, extract_event, master_event, chat_event, reconcile_event,
-        read_receipt, release_quarantined, briefing_telegram, phone_watch, memory_digest, care_checkin,
+        read_receipt, release_quarantined, briefing_telegram, phone_watch, memory_digest, care_checkin, companion_chat,
     ]
     cron_jobs = [
         cron(sheets_sync, second=0, run_at_startup=False),  # every 60 s
         cron(phone_watch, minute={5, 35}, run_at_startup=False),
         cron(memory_digest, hour=23, minute=55, run_at_startup=False),
         cron(care_checkin, hour={9, 11, 14, 16, 19}, minute=20, run_at_startup=False),
+        cron(companion_chat, hour={9, 13, 20}, minute=45, run_at_startup=False),
         cron(steward_tick, minute={3, 13, 23, 33, 43, 53}, run_at_startup=False),  # every 10 min
         cron(cyberramen_poll, minute={0, 10, 20, 30, 40, 50}),
         cron(news_ingest, minute={0, 15, 30, 45}),

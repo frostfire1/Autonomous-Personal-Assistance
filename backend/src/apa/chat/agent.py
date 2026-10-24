@@ -101,6 +101,18 @@ async def remember(redis: Any | None, user: str, reply: str) -> None:
         log.warning("chat_history_unavailable", error=str(e))
 
 
+async def remember_assistant(redis: Any | None, reply: str) -> None:
+    """A message the assistant started itself, so the owner's answer to it has its context."""
+    if redis is None:
+        return
+    try:
+        await redis.lpush(HISTORY_KEY, json.dumps({"r": "assistant", "t": reply[:400]}, ensure_ascii=False))
+        await redis.ltrim(HISTORY_KEY, 0, HISTORY_TURNS - 1)
+        await redis.expire(HISTORY_KEY, HISTORY_TTL_S)
+    except Exception as e:
+        log.warning("chat_history_unavailable", error=str(e))
+
+
 def _history_block(history: list[dict]) -> str:
     return "\n".join(f"{h['r']}: {h['t']}" for h in history[-HISTORY_TURNS:]) or "(none)"
 

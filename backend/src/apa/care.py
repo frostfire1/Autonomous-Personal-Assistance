@@ -7,6 +7,7 @@ fallback if the model is down), sends them, and remembers that it did: each obse
 `MAX_PER_DAY` messages a day, never at night. It never diagnoses; it asks, suggests one small thing, and only for something that
 keeps repeating does it mention a doctor. Switch off with CARE_CHECKINS=false."""
 
+import time
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Any
@@ -124,4 +125,5 @@ async def run(sm: async_sessionmaker, llm: Any, redis: Any, notifier: Any, tz: Z
     await redis.incr(f"apa:care:count:{day}")
     await redis.expire(f"apa:care:count:{day}", 2 * 86400)
     await notifier.send(await _message(llm, await profile.style_guide(sm), fresh))
+    await redis.set("apa:proactive:last", str(time.time()), ex=2 * 86400)  # the companion waits a while after this
     return "sent"

@@ -113,7 +113,7 @@ async def run_briefing_precompute(
                                        lang=choice.language)
         ids.append(row.id)
         if kind == "short" and get_settings().tts_enabled:
-            await voice.warm(redis, [s["text"] for s in row.sections], voice=choice.voice, lang=row.lang)  # cached clips are kept
+            await voice.warm(redis, [row.text], voice=choice.voice, lang=row.lang)  # ONE clip for the whole short briefing (one voice call)
     if notifier is not None:
         for i, text in enumerate(
             await daily_telegram(sm, redis, tz, now, rebuild=reuse_since is None, lang=choice.language, llm=llm), start=1

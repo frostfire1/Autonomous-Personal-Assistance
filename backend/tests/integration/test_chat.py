@@ -790,3 +790,52 @@ async def test_the_style_trait_survives_a_refresh_when_the_chat_is_gone_and_guid
     await profile.refresh(stack, TZ, datetime.now(TZ))  # no chat left to measure: the earlier measurement stays
     guide = await profile.style_guide(stack)
     assert "Indonesian" in guide and "casual and friendly" in guide and "do not use emoji" in guide and "around 12 words" in guide
+
+
+async def test_the_companion_starts_a_chat_with_manners_and_the_reply_continues_it(stack, redis, monkeypatch):
+    import time
+    from datetime import datetime
+
+    from sqlalchemy import select
+
+    from apa import companion
+    from apa.chat import agent
+    from apa.core.settings import get_settings
+    from tests.integration.helpers import FakeNotifier
+
+    monkeypatch.setenv("COMPANION_CHATS", "true")
+    get_settings.cache_clear()
+    seen = []
+    reply = ["Eh, jadi beli vitamin yang kemarin kamu bilang? Udah ketemu yang cocok?"]
+
+    class Llm:
+        async def complete(self, route, system, user, **kw):
+            seen.append(user)
+            return LLMResult(reply[0], "fake", 10, 10, 0)
+
+    n = FakeNotifier()
+    now = datetime.now(TZ).replace(hour=13, minute=45)
+    assert await companion.run(stack, Llm(), redis, n, TZ, now.replace(hour=16)) == "quiet_hours"
+    assert await companion.run(stack, Llm(), redis, n, TZ, now) == "sent" and n.sent == reply
+    assert "midday" in seen[0] and "STYLE" in seen[0] and "ALREADY SENT" in seen[0]
+    assert "assistant: Eh, jadi beli vitamin" in agent._history_block(await agent.load_history(redis))  # the answer will have context
+    async with stack() as s:
+        assert [m.body for m in (await s.execute(select(TelegramMessage))).scalars()] == reply
+    assert await companion.run(stack, Llm(), redis, n, TZ, now) == "too_soon"  # two hours between proactive messages
+    await redis.delete(companion.LAST_KEY)
+    await raw_event(stack, "lagi sibuk nih", source="telegram_shorthand", status="skipped")  # the owner is chatting right now
+    assert await companion.run(stack, Llm(), redis, n, TZ, now) == "busy" and len(n.sent) == 1
+
+    # two unanswered messages: it stops until the owner writes
+    async with stack() as s:
+        from sqlalchemy import text as sql
+
+        await s.execute(sql("update inbound_events set received_at = now() - interval '1 day'"))
+        await s.commit()
+    await redis.delete(companion.SENDS_KEY, companion.LAST_KEY)
+    await redis.lpush(companion.SENDS_KEY, str(time.time()), str(time.time()))
+    assert await companion.run(stack, Llm(), redis, n, TZ, now) == "waiting" and len(n.sent) == 1
+
+    reply[0] = "NOTHING"  # nothing real to say: silence, not a canned message
+    await redis.delete(companion.SENDS_KEY, companion.LAST_KEY)
+    assert await companion.run(stack, Llm(), redis, n, TZ, now) == "nothing" and len(n.sent) == 1

@@ -48,7 +48,7 @@ class BriefingService : Service(), TextToSpeech.OnInitListener {
     private val clips = HashMap<Int, Deferred<File?>>()
 
     /** What to say: one list of pieces per section, so Skip can jump to the next topic. */
-    private class Plan(val id: Long, val topics: List<Pair<String, List<String>>>)
+    private class Plan(val id: Long, val topics: List<Pair<String, List<String>>>, val whole: Boolean = false)
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -70,11 +70,13 @@ class BriefingService : Service(), TextToSpeech.OnInitListener {
                 if (!r.ok) return@launch fail("Server rejected the request (${r.code}). Check the API key.")
                 val j = JSONObject(r.body)
                 val sections = j.getJSONArray("sections")
-                val topics = (0 until sections.length()).map {
+                // The short briefing (after the alarm) is ONE clip: one call to the voice engine instead of one per topic.
+                val whole = kind == "short" && j.optString("text").isNotBlank()
+                val topics = if (whole) listOf("Your briefing" to Speech.chunk(j.getString("text"))) else (0 until sections.length()).map {
                     val s = sections.getJSONObject(it)
                     s.getString("topic") to Speech.chunk(s.getString("text"))
                 }
-                pending = Plan(j.getLong("id"), topics)
+                pending = Plan(j.getLong("id"), topics, whole)
                 if (!requestFocus()) return@launch finish(played = false)  // a call or navigation is speaking: stay quiet
                 natural = true
                 playNatural(0)
@@ -96,7 +98,8 @@ class BriefingService : Service(), TextToSpeech.OnInitListener {
         if (index >= plan.topics.size) return null
         return clips.getOrPut(index) {
             scope.async(Dispatchers.IO) {
-                Api(Config(this@BriefingService)).audio(plan.id, index)?.let {
+                val api = Api(Config(this@BriefingService))
+                (if (plan.whole) api.audioWhole(plan.id) else api.audio(plan.id, index))?.let {
                     File(cacheDir, "brief_${plan.id}_$index.mp3").also { f -> f.writeBytes(it) }
                 }
             }

@@ -93,5 +93,12 @@ Payments and their confirmation messages, the diary, learned items, notes and th
 - **Care check-ins:** a few times a day the server looks at last night's sleep, whether any meal was recorded, being up past
   midnight, caffeine and stress. If something stands out it sends one short message in your style, for each reason at most once a day
   and never more than two messages a day, never at night. It does not diagnose. Turn it off with `CARE_CHECKINS=false` in `.env`.
+- **Conversations it starts** (`COMPANION_CHATS`, default on): in the morning, at midday and in the evening it may write to you first, like a
+  friend, about something it really knows (a plan you mentioned, a hobby, yesterday) and in your style. Your answer continues the
+  chat with full context. It never interrupts while you are chatting, waits two hours after any other proactive message, sends at most
+  `COMPANION_MAX_PER_DAY` (3) a day, and stops after two unanswered messages until you write again. If it has nothing real to say it
+  stays silent. `COMPANION_CHATS=false` turns it off.
+- **The briefing after the alarm is one MP3:** the short briefing is spoken in a single call to the voice engine (so it costs one request,
+  not one per topic) and cached; the full briefing, started by hand, still plays topic by topic.
 - **Spoken briefings** use the language and voice you picked in settings; the style measurement does not change settings by itself.
 

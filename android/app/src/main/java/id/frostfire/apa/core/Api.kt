@@ -56,6 +56,15 @@ class Api(private val cfg: Config) {
         }.getOrNull()
     }
 
+    /** The whole briefing as ONE MP3 (a single voice call on the server); null on any failure (the app then speaks it itself). */
+    suspend fun audioWhole(id: Long): ByteArray? = withContext(Dispatchers.IO) {
+        runCatching {
+            client.newCall(sign(builder("/briefing/$id/audio").get().build())).execute().use {
+                if (it.isSuccessful) it.body?.bytes()?.takeIf { b -> b.size > 500 } else null
+            }
+        }.getOrNull()
+    }
+
     /** The full current selection of extra banking apps; the server stores it and answers with what it accepted. */
     suspend fun postPackages(apps: List<Pair<String, String>>): Result {
         val arr = org.json.JSONArray()

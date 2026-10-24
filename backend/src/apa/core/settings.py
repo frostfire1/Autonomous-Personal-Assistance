@@ -67,6 +67,9 @@ class Settings(BaseSettings):
     phone_silent_hours: int = 2
     # Caring check-ins in Telegram (sleep, meals, late nights, caffeine, stress): at most 2 a day
     care_checkins: bool = True
+    # The assistant starts a chat now and then (morning, midday, evening) and stops if not answered
+    companion_chats: bool = True
+    companion_max_per_day: int = 3
     # Raw chat text older than this many days is erased once the diary has captured it (0 = keep for ever)
     chat_keep_days: int = 7
 

@@ -799,3 +799,15 @@ def test_care_speaks_up_only_for_a_reason_and_never_at_night():
     assert at(15, meals_today=0) == ["food"] and at(10, meals_today=0) == [] and at(15, meals_today=0, food_habit=False) == []
     assert at(10, up_late_at=datetime(2026, 3, 10, 1, 40, tzinfo=tz)) == ["late"] and at(16, caffeine_mg=380) == ["caffeine"]
     assert at(12, stress_avg=82) == ["stress"] and at(23, sleep_mins=200, stress_avg=90) == [] and at(6, sleep_mins=200) == []
+
+
+def test_the_companion_only_starts_chats_in_the_morning_midday_and_evening():
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+
+    from apa import companion
+
+    tz = ZoneInfo("Asia/Jakarta")
+    at = lambda h, m=0: companion.slot_for(datetime(2026, 3, 10, h, m, tzinfo=tz))  # noqa: E731
+    assert at(9)[0] == "morning" and at(13)[0] == "midday" and at(20)[0] == "evening"
+    assert at(7) is None and at(11) is None and at(16) is None and at(22) is None and at(2) is None

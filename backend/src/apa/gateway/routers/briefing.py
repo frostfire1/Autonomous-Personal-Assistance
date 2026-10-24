@@ -42,6 +42,22 @@ async def full(request: Request, fresh: bool = False) -> dict:
     return await _get(request, "full", fresh)
 
 
+@router.get("/{briefing_id}/audio")
+async def audio_whole(briefing_id: int, request: Request) -> Response:
+    """The whole briefing as ONE MP3 (one synthesis, so one call to the voice engine instead of one per topic): what the app plays
+    after the alarm. Cached like a section; 503 means "speak it yourself"."""
+    async with SessionLocal() as s:
+        row = (await s.execute(select(Briefing).where(Briefing.id == briefing_id))).scalar_one_or_none()
+    if row is None:
+        raise HTTPException(404, "no such briefing")
+    try:
+        choice = await prefs.load(SessionLocal)
+        mp3 = await voice.audio_for(getattr(request.app.state, "arq", None), row.text, voice=choice.voice, lang=row.lang)
+    except voice.TtsError:
+        raise HTTPException(503, "voice unavailable") from None
+    return Response(mp3, media_type=voice.sniff(mp3), headers={"Cache-Control": "private, max-age=86400"})
+
+
 @router.get("/{briefing_id}/audio/{index}")
 async def audio(briefing_id: int, index: int, request: Request) -> Response:
     """One section as MP3 in a natural voice. 503 means "speak it yourself": the app then uses its

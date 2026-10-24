@@ -35,7 +35,7 @@ CACHE_TTL_S = 3 * 86400
 BACKUP_TTL_S = 600  # audio from a backup engine is kept briefly, so the chosen engine is tried again soon
 GEMINI_COOLDOWN_S = 120  # after a quota answer (429) Gemini is not asked again for this long
 _gemini_blocked_until = 0.0
-MAX_CHARS = 2500  # one section; a longer one is cut at a sentence rather than sent whole
+MAX_CHARS = 4500  # one clip (the whole short briefing, or one section of the full one); longer is cut at a sentence
 TIMEOUT_S = 40
 
 

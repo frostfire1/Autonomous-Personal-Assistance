@@ -74,6 +74,7 @@ ignore = ["B008"]  # FastAPI Depends() in defaults is the framework idiom
 "src/apa/youtube_api.py" = ["E501"]
 "src/apa/content.py" = ["E501"]
 "src/apa/care.py" = ["E501"]
+"src/apa/companion.py" = ["E501"]
 "src/apa/llm_config.py" = ["E501"]  # docstrings and owner-facing labels
 "src/apa/gateway/routers/llm.py" = ["E501"]
 "src/apa/integrations/llm.py" = ["E501"]

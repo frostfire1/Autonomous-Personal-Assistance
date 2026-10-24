@@ -461,6 +461,17 @@ async def test_a_section_is_served_as_mp3_synthesised_once_and_cached(api, fake_
     assert fake_voice == [b["sections"][0]["text"]]  # the second request came from the cache
 
 
+async def test_the_whole_short_briefing_is_one_mp3_made_with_one_voice_call(api, fake_voice):
+    h = {"x-api-key": "k"}
+    b = (await api.get("/briefing/short", headers=h)).json()
+    assert (await api.get(f"/briefing/{b['id']}/audio")).status_code == 401
+    r = await api.get(f"/briefing/{b['id']}/audio", headers=h)
+    assert r.status_code == 200 and r.headers["content-type"] == "audio/mpeg" and r.content.startswith(b"ID3")
+    await api.get(f"/briefing/{b['id']}/audio", headers=h)
+    assert fake_voice == [b["text"]]  # one synthesis of the whole text, the second request came from the cache
+    assert (await api.get("/briefing/99999/audio", headers=h)).status_code == 404
+
+
 async def test_audio_for_a_missing_briefing_or_section_is_404(api, fake_voice):
     h = {"x-api-key": "k"}
     b = (await api.get("/briefing/short", headers=h)).json()
@@ -517,7 +528,7 @@ async def test_the_morning_precompute_has_every_clip_ready_and_a_voice_outage_do
     from apa.tts import voice
 
     ids = await run_briefing_precompute(stack, Narrator(), redis, TZ, datetime.now(TZ))
-    assert len(ids) == 2 and len(fake_voice) >= 2
+    assert len(ids) == 2 and len(fake_voice) == 1  # ONE clip: the whole short briefing, one call to the voice engine
     before = len(fake_voice)
     await run_briefing_precompute(stack, Narrator(), redis, TZ, datetime.now(TZ))
     assert len(fake_voice) == before  # identical text: every clip came from the cache
@@ -793,7 +804,7 @@ async def test_the_morning_job_sends_the_telegram_briefing_once_and_the_voice_cl
     assert len(ids) == 2 and n.sent and "RINGKASAN PAGI" in n.sent[0]
     sent = len(n.sent)
     short_sections = (await rows(stack, Briefing, Briefing.id == ids[0]))[0].sections
-    assert len(fake_voice) == len(short_sections)  # clips for the short briefing, not for the long one
+    assert len(short_sections) >= 2 and len(fake_voice) == 1  # one clip for the short briefing (not one per topic), none for the long one
     await run_briefing_precompute(stack, Narrator(), redis, TZ, datetime.now(TZ), notifier=n)
     assert len(n.sent) == sent  # a second run the same day sends nothing again
 
