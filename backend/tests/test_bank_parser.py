@@ -329,3 +329,12 @@ def test_money_moved_between_your_own_pockets_is_recognised_and_a_real_receipt_i
     assert classify_skip("Rp50.000 dipindahkan dari kantong Utama ke kantong Liburan") == "own_pocket_move"
     assert classify_skip("You've received Rp200.000 from GoPay. Need help? Contact Tanya Jago at 1500 746.") is None
     assert classify_skip("Transfer ke ANDI Rp 50.000 berhasil") is None  # a real transfer out is still a transaction
+
+
+def test_the_merchant_is_never_the_banks_help_line_or_a_number():
+    from apa.ingestion.bank_parser import parse_notification
+
+    got = parse_notification("com.jago.digitalBanking", "You've received Rp50.500 from GoPay. Need help? Contact Tanya Jago at 1500 746.")
+    assert got is not None and got.merchant == "GoPay" and got.direction == "in"
+    got = parse_notification("com.bca", "Pembayaran QRIS Rp18.000 ke KOPI KENANGAN berhasil. Butuh bantuan? Hubungi Halo BCA di 1500888.")
+    assert got is not None and got.merchant == "KOPI KENANGAN"

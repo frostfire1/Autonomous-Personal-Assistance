@@ -270,3 +270,38 @@ def test_phone_watch_tells_the_owner_once_when_the_phone_goes_quiet_or_the_liste
     result, sent = _watch({"listener": False, "pending": 0, "age_h": 0.1})
     assert result == "listener" and "terputus" in sent[0]
     assert _watch({"listener": False, "pending": 0, "age_h": 0.1}, told=True) == ("already_told", [])  # one message per 12 hours
+
+
+# ---- describing a payment without an amount ------------------------------------------------------------------------------------
+
+
+def test_a_payment_described_without_an_amount_proposes_an_edit_of_the_recent_transaction(monkeypatch):
+    import asyncio
+    from datetime import UTC, datetime
+    from zoneinfo import ZoneInfo
+
+    from apa.chat import master
+    from apa.pipeline import chat as pc
+
+    seen = {}
+
+    async def fake_tx(sm, reply_to, sent_at):
+        seen["reply_to"] = reply_to
+        return seen.get("tx", 77)
+
+    async def fake_plan(sm, llm, text, history, tz, redis):
+        seen["hint"] = text
+        return "edit card", 0
+
+    monkeypatch.setattr(pc, "_described_transaction", fake_tx)
+    monkeypatch.setattr(pc, "plan_action", fake_plan)
+
+    def run(text, reply_to=None):
+        return asyncio.run(pc._execute(None, None, None, master.Plan("transaction"), text, [], None, ZoneInfo("Asia/Jakarta"),
+                                       datetime.now(UTC), None, reply_to))
+
+    assert run("beli makan nasgor sosis solaria", reply_to=15) == ("edit card", "action")
+    assert "#77" in seen["hint"] and "edit_transaction" in seen["hint"] and seen["reply_to"] == 15
+    assert run("kopi susu 18k tunai") == (None, "transaction")  # with an amount it is a new payment, as before
+    seen["tx"] = None
+    assert run("beli makan nasgor sosis solaria") == (None, "transaction")  # nothing recent to describe: the extractor decides
