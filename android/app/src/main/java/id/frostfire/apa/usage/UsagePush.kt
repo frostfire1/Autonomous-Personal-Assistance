@@ -1,5 +1,6 @@
 package id.frostfire.apa.usage
 
+import android.content.Context
 import android.os.Build
 import id.frostfire.apa.core.Api
 import id.frostfire.apa.core.Config
@@ -59,20 +60,33 @@ object UsagePush {
         return JSONObject().put("device", Build.MODEL.take(40)).put("kind", "android").put("day", day.toString()).put("apps", apps)
     }
 
-    suspend fun run(cfg: Config, api: Api) {
+    suspend fun run(ctx: Context, cfg: Config, api: Api) {
         val now = System.currentTimeMillis()
         if (now - cfg.usagePushedAt < EVERY_MS) return
-        val buckets = get("/buckets/", cfg.awKey)?.let { JSONObject(it) } ?: return  // ActivityWatch is not running here
-        val bucket = buckets.keys().asSequence().firstOrNull { it.startsWith("aw-watcher-android") } ?: return
+        android.util.Log.i("APA-usage", "run: usage access ${UsageStatsSource.granted(ctx)}")
+        val builtIn = UsageStatsSource.granted(ctx)  // Android's own usage access wins; ActivityWatch is the fallback
+        var bucket = ""
+        if (!builtIn) {
+            val buckets = get("/buckets/", cfg.awKey)?.let { JSONObject(it) } ?: return  // ActivityWatch is not running here
+            bucket = buckets.keys().asSequence().firstOrNull { it.startsWith("aw-watcher-android") } ?: return
+        }
         val zone = ZoneId.systemDefault()
         val today = LocalDate.now(zone)
+        var sent = false
         for (day in listOf(today.minusDays(1), today)) {
             val start = day.atStartOfDay(zone).toInstant()
             val end = minOf(day.plusDays(1).atStartOfDay(zone).toInstant(), Instant.ofEpochMilli(now))
-            val body = get("/buckets/$bucket/events?start=$start&end=$end&limit=10000", cfg.awKey) ?: return
-            val d = summarize(JSONArray(body))
-            if (d.apps.isNotEmpty() && !api.putUsage(payload(day, d)).ok) return
+            val d = if (builtIn) UsageStatsSource.day(ctx, start, end) else {
+                val body = get("/buckets/$bucket/events?start=$start&end=$end&limit=10000", cfg.awKey) ?: return
+                summarize(JSONArray(body))
+            }
+            if (d.apps.isNotEmpty()) {
+                val r = api.putUsage(payload(day, d))
+                android.util.Log.i("APA-usage", "$day ${d.apps.size} apps (${if (builtIn) "android" else "activitywatch"}) -> HTTP ${r.code}")
+                if (!r.ok) return
+                sent = true
+            }
         }
-        cfg.usagePushedAt = now
+        if (sent) cfg.usagePushedAt = now  // nothing to report yet (no access, nothing used): try again at the next sync
     }
 }

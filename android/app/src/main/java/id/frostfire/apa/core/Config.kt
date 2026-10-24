@@ -82,8 +82,8 @@ class Config(context: Context) {
 
     /** When app usage from ActivityWatch was last sent (epoch millis, 0 = never). */
     var usagePushedAt: Long
-        get() = p.getLong("usage_pushed_at", 0L)
-        set(v) = p.edit().putLong("usage_pushed_at", v).apply()
+        get() = p.getLong("usage_sent_at", 0L)
+        set(v) = p.edit().putLong("usage_sent_at", v).apply()
 
     val deviceId: String
         get() = p.getString("device_id", null) ?: UUID.randomUUID().toString().also {

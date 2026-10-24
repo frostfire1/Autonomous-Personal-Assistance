@@ -35,7 +35,7 @@ class SyncWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(ctx, 
             }.getOrNull() ?: "0.2.0"
             api.heartbeat(cfg.listenerUp, outbox.pendingCount(), version)
         }
-        runCatching { UsagePush.run(cfg, api) }  // app usage from ActivityWatch, if it is installed
+        runCatching { UsagePush.run(applicationContext, cfg, api) }.onFailure { android.util.Log.w("APA-usage", "failed: $it") }  // app usage from ActivityWatch, if it is installed
         for (row in outbox.pending()) {
             val r = try {
                 api.postNotification(row.key, row.pkg, row.title, row.text, row.postedAt)

@@ -15,11 +15,12 @@ from apa.db.models.intel import AppUsage
 
 KINDS = ("android", "desktop", "ios", "web", "other")
 CATEGORIES = (
+    ("finance", ("bank", "wondr", "gopay", "ovo", "dana", "jago", "bca", "mandiri", "bni", "bri", "livin", "blu", "flip", "shopeepay", "linkaja", "paypal", "wallet", "invest", "bibit", "ajaib", "stockbit")),
     ("messaging", ("whatsapp", "telegram", "signal", "line", "messenger", "discord", "slack", "teams", "mail", "gmail", "outlook")),
     ("social", ("instagram", "tiktok", "twitter", "facebook", "reddit", "threads", "linkedin", "snapchat", "x.com", "weibo")),
-    ("video", ("youtube", "netflix", "vidio", "disney", "twitch", "prime video", "bilibili", "vlc", "mpv")),
+    ("video", ("youtube", "netflix", "vidio", "disney", "twitch", "prime video", "bilibili", "vlc", "mpv", "melolo", "dramabox", "reelshort", "shortmax", "viu", "wetv", "iqiyi", "tv")),
     ("music", ("spotify", "music", "joox", "soundcloud", "podcast", "audible")),
-    ("games", ("game", "steam", "roblox", "minecraft", "genshin", "mobile legends", "pubg", "free fire", "epic", "riot", "valorant")),
+    ("games", ("game", "steam", "roblox", "minecraft", "genshin", "mobile legends", "pubg", "free fire", "epic", "riot", "valorant", "legends", "chess", "arena", "clash", "royale", "pokemon", "honkai", "wuthering", "sausage", "candy")),
     ("shopping", ("tokopedia", "shopee", "lazada", "bukalapak", "amazon", "gojek", "grab", "traveloka", "ebay")),
     ("work", ("code", "studio", "terminal", "powershell", "cmd", "git", "docs", "word", "excel", "powerpoint", "sheets", "notion",
               "obsidian", "figma", "jetbrains", "intellij", "pycharm", "android studio", "putty", "ssh", "zoom", "meet")),
