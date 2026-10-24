@@ -53,6 +53,21 @@ export async function put<T>(path: string, body: unknown): Promise<T> {
   return res.json() as Promise<T>;
 }
 
+/** DELETE; the server's own reason is thrown as the error message (like `put`). */
+export async function del<T>(path: string): Promise<T> {
+  const res = await fetch(`/api${path}`, { method: "DELETE", headers: { "x-api-key": getKey() } });
+  if (res.status === 401) {
+    setKey("");
+    window.location.reload();
+    throw new Error("401");
+  }
+  if (!res.ok) {
+    const detail = await res.json().then((j: { detail?: unknown }) => (typeof j.detail === "string" ? j.detail : ""), () => "");
+    throw new Error(detail || `${res.status} ${res.statusText}`);
+  }
+  return res.json() as Promise<T>;
+}
+
 /** POST a JSON body; the server's own reason is thrown as the error message (like `put`). */
 export async function post<T>(path: string, body: unknown): Promise<T> {
   const res = await fetch(`/api${path}`, {

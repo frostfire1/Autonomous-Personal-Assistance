@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { api, audioWithInfo, put, useApi } from "@/lib/api";
+import { api, audioWithInfo, del, put, useApi } from "@/lib/api";
 
 type Prefs = {
   language: string;
@@ -33,6 +33,9 @@ export default function SettingsPage() {
   const [msg, setMsg] = useState("");
   const [playing, setPlaying] = useState(false);
   const player = useRef<HTMLAudioElement | null>(null);
+  const { data: memory, reload: reloadMemory } = useApi<{ facts: string[] }>("/memory");
+  const { data: formats, reload: reloadFormats } = useApi<Record<string, { formats: number; skip: number; retired: number }>>("/templates");
+  const [note, setNote] = useState("");
 
   useEffect(() => {
     if (view) {
@@ -167,6 +170,38 @@ export default function SettingsPage() {
           {msg && <p className="muted">{msg}</p>}
         </div>
       )}
+
+      <h2>What the assistant remembers</h2>
+      <div className="card">
+        {!memory ? <p className="muted">Loading...</p> : memory.facts.length === 0 ? (
+          <p className="muted">Nothing yet. Tell the assistant in Telegram, for example &quot;remember that I am vegetarian&quot;. It never stores passwords or card numbers.</p>
+        ) : (
+          <ol>
+            {memory.facts.map((f, i) => (
+              <li key={i}>{f} <button className="link" onClick={async () => { await del(`/memory/${i + 1}`); reloadMemory(); }}>Forget</button></li>
+            ))}
+          </ol>
+        )}
+      </div>
+
+      <h2>Notification formats learned</h2>
+      <div className="card">
+        <p className="muted">The AI reads an unfamiliar bank notification once; after that the same wording in the same app is handled without the AI. Clear an app if a learned format turned out wrong; the AI then reads the next one again.</p>
+        {!formats ? <p className="muted">Loading...</p> : Object.keys(formats).length === 0 ? <p className="muted">Nothing learned yet.</p> : (
+          <table>
+            <thead><tr><th>App</th><th>Formats</th><th>Not a payment</th><th>Retired</th><th /></tr></thead>
+            <tbody>
+              {Object.entries(formats).map(([pkg, f]) => (
+                <tr key={pkg}>
+                  <td>{pkg}</td><td>{f.formats}</td><td>{f.skip}</td><td>{f.retired}</td>
+                  <td><button onClick={async () => { await del(`/templates?package=${encodeURIComponent(pkg)}`); setNote(`Cleared ${pkg}.`); reloadFormats(); }}>Clear</button></td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+        {note && <p className="muted">{note}</p>}
+      </div>
 
       <h2>Configured elsewhere</h2>
       <ul>

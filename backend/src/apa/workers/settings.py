@@ -283,7 +283,6 @@ async def briefing_precompute(ctx: dict) -> None:
     )
 
 
-PHONE_SILENT_HOURS = 4  # no word from the phone for this long: bank notifications are probably not being collected
 PHONE_ALERT_EVERY_S = 12 * 3600
 
 
@@ -301,7 +300,7 @@ async def phone_watch(ctx: dict) -> str:
     hb = json.loads(raw)
     age_h = (datetime.now(UTC).timestamp() - hb["ts"]) / 3600
     kind = text = None
-    if age_h >= PHONE_SILENT_HOURS:
+    if age_h >= get_settings().phone_silent_hours:  # bank notifications are probably not being collected
         kind, text = "silent", (
             f"\U0001F4F5 HP belum melapor ke server sejak {int(age_h)} jam. Notifikasi bank tidak terkumpul selama itu. "
             "Buka aplikasi APA di HP; kalau sering terjadi, nyalakan Autostart dan pilih Tanpa batasan di pengaturan baterai."

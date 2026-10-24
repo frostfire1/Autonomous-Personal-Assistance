@@ -117,16 +117,17 @@ async def test_an_android_notification_takes_its_wallet_from_the_app_not_the_mod
         ({"nonsense": True}, "tidak bisa dipahami"),  # valid JSON, wrong shape
     ],
 )
-async def test_text_the_user_typed_that_cannot_be_recorded_gets_one_reply(stack, reply, reason_text):
-    notifier = FakeNotifier()
-    ctx = make_ctx(stack, FlowLLM(reply), notifier)
+async def test_text_the_user_typed_that_cannot_be_recorded_goes_to_the_assistant_not_a_canned_error(stack, reply, reason_text):
+    """Unclear typed text is not answered with a canned "cannot understand": the assistant talks to the owner about it
+    (asks what they meant, with the recent transactions and the chat as context). Nothing is recorded on a guess."""
+    notifier, q = FakeNotifier(), Q()
+    ctx = make_ctx(stack, FlowLLM(reply), notifier, q)
     eid = await raw_event(stack, AMBIGUOUS, status="needs_llm")
     status = await worker.extract_event(ctx, eid)
     assert status in ("skipped", "needs_review")
     assert await rows(stack, Transaction) == [] and ctx["llm"].calls == []  # nothing recorded, no debate
-    (r,) = await replies(stack)
-    assert reason_text in r.body and AMBIGUOUS[:30] in r.body
-    assert notifier.sent == [r.body] and r.message_id == 101  # delivered and recorded
+    assert notifier.sent == [] and await replies(stack) == []  # no canned error ...
+    assert q.jobs == [("chat_event", eid)]  # ... the assistant picks it up instead
 
 
 async def test_text_that_is_not_a_transaction_goes_to_the_chat_agent_instead_of_an_error_reply(stack):

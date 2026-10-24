@@ -127,6 +127,21 @@ async def clear_formats(package: str | None = None) -> dict:
     return {"cleared": removed}
 
 
+@router.get("/memory")
+async def get_memory() -> dict:
+    """What the assistant has been asked to remember about the owner."""
+    from apa import assistant_memory
+
+    return {"facts": await assistant_memory.load(SessionLocal)}
+
+
+@router.delete("/memory/{index}")
+async def forget_memory(index: int) -> dict:
+    from apa import assistant_memory
+
+    return {"result": await assistant_memory.forget(SessionLocal, index), "facts": await assistant_memory.load(SessionLocal)}
+
+
 @router.get("/setup/status")
 async def status(request: Request) -> dict:
     """What is working and what is not yet, with the way to fix each. Core items first."""

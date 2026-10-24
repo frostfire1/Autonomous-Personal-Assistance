@@ -60,6 +60,8 @@ class Settings(BaseSettings):
 
     # Unrecognised bank notifications that may be sent to the model per hour (recognised ones never are).
     notification_llm_per_hour: int = 30
+    # Telegram says so when the phone app has not checked in for this many hours
+    phone_silent_hours: int = 2
 
     # Safety defaults; the live values come from policy_rules (Web UI > Settings)
     undo_window_hours: int = 24

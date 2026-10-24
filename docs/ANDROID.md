@@ -59,15 +59,15 @@ screen shows how many notifications are waiting and has a **Send queued notifica
 
 Tips so the VPN does not drop quietly: keep Tailscale on **always**, exclude Tailscale from battery optimisation (and on Xiaomi switch its
 Autostart on too), and use the same server address on and off the home network by using the Tailscale name instead of the `192.168.x.x` address.
-If the phone has not reached the server for 4 hours, the server tells you in Telegram (the message comes from the server, so it works even though the phone is cut off).
+If the phone has not reached the server for 2 hours (`PHONE_SILENT_HOURS`), the server tells you in Telegram (the message comes from the server, so it works even though the phone is cut off).
 
 ## When something is not recorded, Telegram tells you
 
 - **A notification that did not become a ledger entry** (for example "moved between your own pockets", or wording the system could not read) is
   sent to Telegram with the reason, and how to enter it by hand if it was a real payment. Noise (one-time codes, promotions, reminders,
   failures) is not reported. At most 6 such messages an hour.
-- **The phone stops collecting:** the app checks in with the server (every sync, and whenever you open it). If it has been silent for 4
-  hours, or its notification listener is disconnected, Telegram says so (at most once per 12 hours). The app also tries to re-link the
+- **The phone stops collecting:** the app checks in with the server (every sync, and whenever you open it). If it has been silent for 2
+  hours (`PHONE_SILENT_HOURS` in `.env`), or its notification listener is disconnected, Telegram says so (at most once per 12 hours). The app also tries to re-link the
   listener itself. On Xiaomi, Oppo, Vivo and similar phones the usual fix is to switch **Autostart** on for APA and set battery to
   **No restrictions**; the settings screen has buttons for both.
 

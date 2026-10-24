@@ -425,3 +425,36 @@ def test_the_read_tools_validate_their_arguments_and_say_what_is_wrong():
                        ("news", {"limit": 99}), ("transactions", {"drop": "table"})):
         assert asyncio.run(run_read(None, tz, now, name, args)).startswith("Bad arguments")
     assert asyncio.run(run_read(None, tz, now, "nope", {})) == "Unknown tool 'nope'."
+
+
+def test_the_assistant_remembers_and_forgets_when_asked_and_then_answers(monkeypatch):
+    from apa import assistant_memory
+
+    saved = []
+
+    async def fake_remember(sm, fact):
+        saved.append(("remember", fact))
+        return f"Remembered: {fact}"
+
+    async def fake_forget(sm, index):
+        saved.append(("forget", index))
+        return "Forgot: x"
+
+    monkeypatch.setattr(assistant_memory, "remember", fake_remember)
+    monkeypatch.setattr(assistant_memory, "forget", fake_forget)
+    (reply, _), shown = _assistant(monkeypatch, [
+        '{"tool": "remember", "args": {"fact": "vegetarian"}}',
+        '{"tool": "forget", "args": {"index": 2}}',
+        '{"tool": "forget", "args": {"index": "two"}}',  # not a number: refused, not executed
+        '{"say": "Oke, saya ingat."}',
+    ])
+    assert reply == "Oke, saya ingat." and saved == [("remember", "vegetarian"), ("forget", 2)]
+    assert "Remembered: vegetarian" in shown[1][1] and "No such item." in shown[3][1]
+
+
+def test_what_is_remembered_is_scrubbed_of_long_numbers_and_capped():
+    from apa.assistant_memory import MAX_CHARS, clean
+
+    assert clean("my card 4111 1111 1111 1111 and rent is on the 5th") == "my card [number] and rent is on the 5th"
+    assert clean("call 0812-3456-7890 please") == "call [number] please"
+    assert len(clean("x " * 500)) <= MAX_CHARS

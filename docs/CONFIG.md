@@ -63,6 +63,15 @@ Two layers, on purpose:
 - Roles: routine (extraction, news, translation), vision (receipts, must read images), arbiter, mental health, macro, research.
   The mental-health and research roles carry `/private` content to the provider you choose.
 
+### The assistant
+
+Free messages in Telegram go to a conversational assistant that knows the context: it remembers the last 16 messages for 6 hours, sees
+your latest transactions and the message you replied to, and can look things up (transactions, spending, budgets, balances, sleep, CVEs,
+news) with read-only tools, so every figure comes from your data. It can talk about anything and asks one short question when unsure.
+**It cannot change your ledger by itself**: recording, editing (including several transactions at once), undoing and budgets are
+always a confirmation card. Tell it "remember that ..." to keep a short note about you (never passwords or card numbers); the notes are
+listed, and deleted, in **Settings** in the dashboard.
+
 ### News and CVEs
 
 Feeds are read every few minutes. A topic is a bucket of feeds. National news uses the home country's built-in feeds (12
@@ -114,4 +123,5 @@ Copy it to `config.yaml`, replace the models (or leave it and choose models in t
 | `SHEETS_CREDENTIALS_FILE`, `SHEETS_SPREADSHEET_ID` / `SHEETS_URL` | one-way Google Sheets mirror | |
 | `HUAWEI_CLIENT_ID`, `HUAWEI_CLIENT_SECRET`, `SECRETS_KEY` | Huawei Health Kit sync (untested live); token encryption key | |
 | `NOTIFICATION_LLM_PER_HOUR` | unrecognised bank notifications the model may read per hour | 30 |
+| `PHONE_SILENT_HOURS` | hours without a check-in from the phone app before Telegram says so | 2 |
 | `TZ` | timezone | `Asia/Jakarta` |

@@ -130,11 +130,14 @@ async def test_only_text_the_extractor_called_not_a_transaction_is_ever_chatted_
     assert llm.calls == [] and n.sent == []
 
 
-async def test_a_topic_with_no_agent_behind_it_is_refused_honestly_without_improvising(stack, redis):
-    llm, n = ScriptLLM(route={"role": "unavailable", "topic": "diet"}), FakeNotifier()
+async def test_a_topic_with_no_specialist_is_answered_by_the_assistant_not_refused(stack, redis):
+    """There are no dead ends: what used to be "topic not available" goes to the conversational assistant, which sees the
+    context (the finance snapshot, the recent chat) and answers or asks one question."""
+    llm, n = ScriptLLM(route={"role": "unavailable", "topic": "diet"}, answer='{"say": "Coba perbanyak sayur dan protein."}'), FakeNotifier()
     await run_chat(stack, llm, n, redis, await chat_event(stack, "diet apa yang bagus?"), tz=TZ)
-    assert llm.kinds() == ["route"]  # no second model call to make something up
-    assert "belum tersedia" in n.sent[0] and "diet" in n.sent[0]
+    assert llm.kinds() == ["route", "answer"] and n.sent == ["Coba perbanyak sayur dan protein."]
+    assert "OWNER: diet apa yang bagus?" in llm.calls[1][2] and "<DATA>" in llm.calls[1][2]  # it was given the context
+    assert "belum tersedia" not in n.sent[0]
 
 
 async def test_a_garbled_router_answer_falls_back_to_general_chat(stack, redis):
@@ -177,7 +180,9 @@ async def test_the_last_turns_are_remembered_for_follow_ups_and_expire(stack, re
     llm.answer = "Kedua."
     await run_chat(stack, llm, n, redis, await chat_event(stack, "siapa namaku?"), tz=TZ)
     assert "halo namaku Budi" in llm.calls[-2][2] and "Pertama." in llm.calls[-2][2]  # the second router saw turn one
-    assert 0 < await redis.ttl(HISTORY_KEY) <= 1800 and await redis.llen(HISTORY_KEY) == 4
+    from apa.chat.agent import HISTORY_TTL_S
+
+    assert 0 < await redis.ttl(HISTORY_KEY) <= HISTORY_TTL_S and await redis.llen(HISTORY_KEY) == 4
 
 
 # ---- proposals: nothing changes until the owner confirms -----------------------------------------------
@@ -384,3 +389,18 @@ async def test_one_confirmed_edit_can_name_several_recent_transactions_at_once(s
     # an extra id that is not a recorded transaction refuses the whole card: nothing is half-applied
     bad = await propose(stack, redis, json.dumps({"tool": "edit_transaction", "args": {"tx_id": a.id, "extra_tx_ids": [999999], "merchant": "X"}}))
     assert "/confirm_" not in bad and "999999" in bad
+
+
+async def test_the_assistants_memory_is_kept_deduplicated_capped_and_can_be_forgotten(stack):
+    from apa import assistant_memory as mem
+
+    assert await mem.load(stack) == []
+    assert (await mem.remember(stack, "I am vegetarian")).startswith("Remembered")
+    assert (await mem.remember(stack, "i am VEGETARIAN")) == "Already remembered."
+    assert await mem.remember(stack, "ab") == "Nothing to remember."
+    for i in range(mem.MAX_FACTS + 5):
+        await mem.remember(stack, f"fact number {i}")
+    facts = await mem.load(stack)
+    assert len(facts) == mem.MAX_FACTS and facts[-1] == f"fact number {mem.MAX_FACTS + 4}" and "I am vegetarian" not in facts
+    assert (await mem.forget(stack, 1)).startswith("Forgot") and len(await mem.load(stack)) == mem.MAX_FACTS - 1
+    assert await mem.forget(stack, 99) == "No such item." and await mem.forget(stack, 0) == "No such item."
