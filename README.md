@@ -16,7 +16,7 @@ CVE rule, voices and languages, the home currency, storage.
 On a Linux or macOS server:
 
 ```bash
-git clone <this repo> apa && cd apa
+git clone https://github.com/frostfire1/Autonomous-Personal-Assistance apa && cd apa
 ./setup.sh
 ```
 
