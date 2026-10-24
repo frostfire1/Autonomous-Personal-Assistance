@@ -14,7 +14,16 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from apa.chat import batch, batch_flow, master
-from apa.chat.agent import CAPABILITIES, answer, ask_agent, load_history, plan_action, remember
+from apa.chat.agent import (
+    CAPABILITIES,
+    _history_block,
+    answer,
+    ask_agent,
+    load_history,
+    plan_action,
+    remember,
+)
+from apa.chat.assistant import converse
 from apa.chat.snapshot import finance_snapshot, health_snapshot
 from apa.core.logging import get_logger
 from apa.core.sanitize import sanitize_untrusted
@@ -38,10 +47,15 @@ UNAVAILABLE = (
 INJECTION = "Pesan itu mengandung instruksi yang saya abaikan. " + CAPABILITIES
 
 
+# Typed text the extractor could not turn into a payment: the assistant talks to the owner about it (asks what they meant)
+# instead of a canned error. An AI outage keeps its own message.
+CHAT_REASONS = frozenset({"llm_not_a_transaction", "invalid_output", "no_digits_in_text", "low_confidence", "amount_not_in_text"})
+
+
 def chat_eligible(source: str, reason: str | None) -> bool:
     """Only the owner's own typed text that was clearly not a transaction. Anything else (a notification we
     cannot read, a transaction we could not parse) keeps its own reply."""
-    return source == "telegram_shorthand" and reason == "llm_not_a_transaction"
+    return source == "telegram_shorthand" and reason in CHAT_REASONS
 
 
 async def _locked(s, event_id: int) -> InboundEvent | None:
@@ -67,16 +81,17 @@ async def run_chat(
         ev = await _locked(s, event_id)
         if ev is None:
             return "missing"
-        if ev.payload.get("chat_done") or not chat_eligible(ev.source, ev.payload.get("skip_reason")):
+        reason = ev.payload.get("skip_reason") or ev.payload.get("review_reason")
+        if ev.payload.get("chat_done") or not chat_eligible(ev.source, reason):
             return "skipped"
-        text = ev.payload.get("text", "")
+        text, reply_to = ev.payload.get("text", ""), ev.payload.get("reply_to")
 
     clean = sanitize_untrusted(text)
     if clean.suspicious:
         reply, role, tokens = INJECTION, "injection", 0  # no model sees an instruction-bearing message
     else:
         try:
-            a = await answer(sm, llm, clean.text, tz=tz, history=await load_history(redis), redis=redis)
+            a = await answer(sm, llm, clean.text, tz=tz, history=await load_history(redis), redis=redis, reply_to=reply_to)
             reply, role, tokens = a.text, a.role, a.tokens
         except LLMUnavailable:
             if job_try < max_tries:
@@ -239,6 +254,8 @@ async def _execute(
                         f"transaction.] {text}")
                 reply, _ = await plan_action(sm, llm, hint, history, tz, redis)
                 return reply, "action"
+            reply, _ = await converse(sm, llm, redis, text, _history_block(history), tz, datetime.now(tz), reply_to=reply_to)
+            return reply, "general"  # nothing recent to describe and no amount: ask what the owner means
         return None, "transaction"
     if p.intent == "batch":
         items = await batch_flow.items_from_model(llm, text, sent_at, tz)
@@ -263,6 +280,7 @@ async def _execute(
     if p.intent == "action":
         reply, _ = await plan_action(sm, llm, text, history, tz, redis)
         return reply, "action"
-    if p.intent == "unavailable":
-        return master.unavailable_text(p.topic), "unavailable"
+    if p.intent == "unavailable" or (p.intent == "chat" and not p.reply):
+        reply, _ = await converse(sm, llm, redis, text, _history_block(history), tz, datetime.now(tz), reply_to=reply_to)
+        return reply, "general"  # no dead ends: the assistant answers, looks things up, or asks what the owner means
     return p.reply or CAPABILITIES, "chat"

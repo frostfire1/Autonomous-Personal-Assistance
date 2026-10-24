@@ -139,8 +139,8 @@ async def run_extract(
         ev.payload, ev.status, ev.processed_at = payload, result.status, datetime.now(UTC)
         reply = None
         to_chat = (
-            enqueuer is not None and result.status == "skipped" and chat_eligible(source, result.reason)
-        )  # a question or request, not a transaction: the conversational agent answers instead
+            enqueuer is not None and result.status in ("skipped", "needs_review") and chat_eligible(source, result.reason)
+        )  # a question, a request or an unclear message, not a transaction: the assistant answers instead
         if result.status != "parsed" and source == "telegram_shorthand" and not to_chat:
             reply = build_reply(text, result.reason or "invalid_output")
             tm = TelegramMessage(

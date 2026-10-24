@@ -8,6 +8,7 @@ debate."""
 
 import json
 from dataclasses import dataclass
+from datetime import datetime
 from typing import Any
 from zoneinfo import ZoneInfo
 
@@ -23,8 +24,8 @@ log = get_logger(__name__)
 
 MAX_REPLY = 1200
 HISTORY_KEY = "apa:chat:history"  # the owner's ordinary chat only; /private never touches Redis
-HISTORY_TURNS = 8
-HISTORY_TTL_S = 1800
+HISTORY_TURNS = 16  # the assistant remembers the recent conversation, so short references make sense
+HISTORY_TTL_S = 6 * 3600
 
 # Roles that can answer from real data today. Value = the facts function.
 GROUNDED = {"A-02": finance_snapshot, "A-03": health_snapshot, "A-07": finance_snapshot, "A-12": finance_snapshot}
@@ -119,6 +120,7 @@ async def answer(
     tz: ZoneInfo,
     history: list[dict] | None = None,
     redis: Any | None = None,
+    reply_to: int | None = None,
 ) -> Answer:
     """Route, then answer as the chosen role. Raises whatever the LLM client raises when it is unavailable."""
     history = history or []
@@ -134,9 +136,11 @@ async def answer(
     tokens = (routed.prompt_tokens or 0) + (routed.completion_tokens or 0)
     log.info("chat_routed", role=role, topic=topic)
 
-    if role == "unavailable":
-        what = f" ({topic})" if topic else ""
-        return Answer(f"Maaf, topik itu{what} belum tersedia di saya. {CAPABILITIES}", role, tokens)
+    if role in ("unavailable", "general"):  # no dead ends: the assistant talks about anything and can look things up
+        from apa.chat.assistant import converse
+
+        reply, t = await converse(sm, llm, redis, text, _history_block(history), tz, datetime.now(tz), reply_to=reply_to)
+        return Answer(reply, "general", tokens + t)
 
     if role == "action":
         reply, t = await plan_action(sm, llm, text, history, tz, redis)

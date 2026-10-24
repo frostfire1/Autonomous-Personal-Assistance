@@ -296,6 +296,12 @@ def test_a_payment_described_without_an_amount_proposes_an_edit_of_the_recent_tr
     monkeypatch.setattr(pc, "_described_transaction", fake_tx)
     monkeypatch.setattr(pc, "plan_action", fake_plan)
 
+    async def fake_converse(sm, llm, redis, text, history_block, tz, now, *, reply_to=None):
+        seen["converse"] = text
+        return "Maksudnya apa?", 0
+
+    monkeypatch.setattr(pc, "converse", fake_converse)
+
     def run(text, reply_to=None):
         return asyncio.run(pc._execute(None, None, None, master.Plan("transaction"), text, [], None, ZoneInfo("Asia/Jakarta"),
                                        datetime.now(UTC), None, reply_to))
@@ -304,7 +310,7 @@ def test_a_payment_described_without_an_amount_proposes_an_edit_of_the_recent_tr
     assert "#77" in seen["hint"] and "edit_transaction" in seen["hint"] and seen["reply_to"] == 15
     assert run("kopi susu 18k tunai") == (None, "transaction")  # with an amount it is a new payment, as before
     seen["tx"] = None
-    assert run("beli makan nasgor sosis solaria") == (None, "transaction")  # nothing recent to describe: the extractor decides
+    assert run("beli makan nasgor sosis solaria") == ("Maksudnya apa?", "general")  # nothing to describe: the assistant asks
 
 
 def test_the_router_is_shown_the_recent_transactions_and_told_a_short_reference_to_them_is_an_edit():
@@ -327,3 +333,95 @@ def test_the_router_is_shown_the_recent_transactions_and_told_a_short_reference_
     assert "labelling them" in seen["system"]
     asyncio.run(master.plan(Llm(), "hello", [], has_draft=False))
     assert "(none in the last 2 hours)" in seen["user"]
+
+
+# ---- the assistant: context, look-ups, no dead ends ---------------------------------------------------------------------------
+
+
+def _assistant(monkeypatch, steps, ran=None, proposed=None):
+    """converse() with a scripted model (one reply per call) and fake look-ups; returns what the model was shown."""
+    import asyncio
+    from datetime import UTC, datetime
+    from zoneinfo import ZoneInfo
+
+    from apa.chat import actions, assistant
+
+    shown = []
+
+    class Llm:
+        async def complete(self, route, system, user, **kw):
+            shown.append((system, user, kw))
+            return type("R", (), {"content": steps[len(shown) - 1], "prompt_tokens": 10, "completion_tokens": 5})()
+
+    async def fake_context(sm, tz, now, history_block, reply_to):
+        return f"CTX reply_to={reply_to}\n{history_block}"
+
+    async def fake_read(sm, tz, now, name, args):
+        (ran if ran is not None else []).append((name, args))
+        return "RESULT-FOR-" + name
+
+    async def fake_propose(sm, redis, raw):
+        (proposed if proposed is not None else []).append(raw)
+        return "CARD"
+
+    monkeypatch.setattr(assistant, "_context", fake_context)
+    monkeypatch.setattr(assistant, "run_read", fake_read)
+    monkeypatch.setattr(actions, "propose", fake_propose)
+    out = asyncio.run(assistant.converse(None, Llm(), None, "berapa makan minggu ini?", "user: hai", ZoneInfo("Asia/Jakarta"),
+                                         datetime.now(UTC), reply_to=42))
+    return out, shown
+
+
+def test_the_assistant_looks_things_up_then_answers_from_the_result(monkeypatch):
+    ran = []
+    (reply, tokens), shown = _assistant(monkeypatch, [
+        '{"tool": "spending", "args": {"period": "week", "by": "category"}}',
+        '{"say": "Minggu ini makan Rp 120.000."}',
+    ], ran)
+    assert reply == "Minggu ini makan Rp 120.000." and tokens == 30
+    assert ran == [("spending", {"period": "week", "by": "category"})]
+    assert "RESULT-FOR-spending" in shown[1][1] and "CTX reply_to=42" in shown[0][1]  # the 2nd call sees the result; the 1st the context
+    assert shown[0][2]["agent"] == "A-00"
+
+
+def test_a_change_is_only_ever_a_proposal_the_owner_confirms(monkeypatch):
+    proposed = []
+    (reply, _), _ = _assistant(monkeypatch, ['{"tool": "edit_transaction", "args": {"tx_id": 7, "extra_tx_ids": [6], "merchant": "Kunci AI"}}'],
+                               proposed=proposed)
+    assert reply == "CARD" and '"edit_transaction"' in proposed[0] and "Kunci AI" in proposed[0]
+
+
+def test_the_assistant_asks_instead_of_failing_and_never_loops_forever(monkeypatch):
+    (reply, _), _ = _assistant(monkeypatch, ['{"say": "Yang mana maksudmu, yang Rp 20.071 atau Rp 50.500?"}'])
+    assert reply.startswith("Yang mana")
+    (reply, _), _ = _assistant(monkeypatch, ["{not json at all"])  # garbage: a polite request to rephrase, not a crash
+    assert "belum paham" in reply
+    looping = ['{"tool": "budgets", "args": {}}'] * 10
+    (reply, _), shown = _assistant(monkeypatch, looping + ['{"say": "ok"}'] * 3)
+    assert len(shown) <= 5 and ("belum bisa" in reply or reply == "ok")  # bounded number of look-ups
+
+
+def test_the_assistant_reads_prose_as_a_reply_and_unknown_tools_are_refused(monkeypatch):
+    from apa.chat.assistant import parse_step
+
+    assert parse_step("Halo! Ada yang bisa dibantu?") == ("say", "Halo! Ada yang bisa dibantu?")
+    assert parse_step('{"say": "ok"}') == ("say", "ok") and parse_step('```json\n{"say": "ok"}\n```') == ("say", "ok")
+    assert parse_step('{"tool": "spending", "args": {"period": "week"}}') == ("tool", ("spending", {"period": "week"}))
+    assert parse_step("{}")[0] == "bad" and parse_step("[1]")[0] == "bad"
+    (reply, _), shown = _assistant(monkeypatch, ['{"tool": "drop_database", "args": {}}', '{"say": "maaf"}'])
+    assert reply == "maaf" and "unknown tool" in shown[1][1]
+
+
+def test_the_read_tools_validate_their_arguments_and_say_what_is_wrong():
+    import asyncio
+    from datetime import UTC, datetime
+    from zoneinfo import ZoneInfo
+
+    from apa.chat.tools import READ_TOOLS, run_read
+
+    now, tz = datetime.now(UTC), ZoneInfo("Asia/Jakarta")
+    assert {"transactions", "spending", "budgets", "balances", "sleep", "cve", "news"} == set(READ_TOOLS)
+    for name, args in (("transactions", {"days": 9999}), ("spending", {"period": "decade"}), ("sleep", {"days": 0}),
+                       ("news", {"limit": 99}), ("transactions", {"drop": "table"})):
+        assert asyncio.run(run_read(None, tz, now, name, args)).startswith("Bad arguments")
+    assert asyncio.run(run_read(None, tz, now, "nope", {})) == "Unknown tool 'nope'."
