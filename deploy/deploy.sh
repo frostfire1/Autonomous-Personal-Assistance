@@ -5,6 +5,7 @@
 #   ./deploy.sh up       build, then (re)start everything the .env asks for
 #   ./deploy.sh web      build and (re)start only the web dashboard
 #   ./deploy.sh status   show containers
+#   ./deploy.sh backup   dump the database to BACKUP_DIR (default ./backups), keep BACKUP_KEEP_DAYS (14); run it from cron
 #   ./deploy.sh down     stop and remove the containers (volumes, so your data, are kept)
 #
 # What runs where is chosen in .env (setup.sh writes it; the web dashboard covers the rest):
@@ -175,4 +176,15 @@ $CE image prune -f >/dev/null 2>&1 || true  # every build leaves the previous im
 
 status() { $CE ps -a --format 'table {{.Names}}\t{{.Status}}\t{{.Ports}}'; }
 
-case "${1:-}" in up) up;; web) web;; down) down;; status) status;; garage) net; start_garage;; *) echo "usage: $0 up|web|down|status|garage"; exit 2;; esac
+backup() {  # a compressed dump of the database into BACKUP_DIR (default ./backups); files older than BACKUP_KEEP_DAYS (14) are removed
+  [ "$DB_MODE" = bundled ] || { echo "backup: DB_MODE=external, dump your own database with your own tools"; exit 1; }
+  local dir="${BACKUP_DIR:-$ROOT/backups}" f
+  mkdir -p "$dir"; chmod 700 "$dir"
+  f="$dir/apa-$(date +%Y%m%d-%H%M%S).sql.gz"
+  $CE exec postgres pg_dump -U "$PG_USER" -d "$PG_DB" --no-owner | gzip > "$f.tmp" && mv "$f.tmp" "$f" || { rm -f "$f.tmp"; echo "backup failed"; exit 1; }
+  chmod 600 "$f"
+  find "$dir" -name 'apa-*.sql.gz' -mtime +"${BACKUP_KEEP_DAYS:-14}" -delete
+  echo "backup: $f ($(du -h "$f" | cut -f1))"
+}
+
+case "${1:-}" in up) up;; web) web;; down) down;; status) status;; backup) backup;; garage) net; start_garage;; *) echo "usage: $0 up|web|down|status|backup|garage"; exit 2;; esac
