@@ -1,6 +1,11 @@
 package id.frostfire.apa.listener
 
 import android.content.ComponentName
+import android.net.ConnectivityManager
+import android.net.Network
+import android.net.NetworkCapabilities
+import android.net.NetworkRequest
+import android.os.SystemClock
 import android.os.Handler
 import android.os.Looper
 import android.service.notification.NotificationListenerService
@@ -36,10 +41,58 @@ class BankNotificationListener : NotificationListenerService() {
     override fun onListenerConnected() {
         super.onListenerConnected()
         Config(this).apply { listenerUp = true; listenerAt = System.currentTimeMillis() }
+        registerNetworkWatch()
+    }
+
+    private var netCallback: ConnectivityManager.NetworkCallback? = null
+    private var lastKick = 0L
+
+    /** When any network (VPN included) comes up or becomes validated and rows are waiting, flush the queue at once. */
+    private fun registerNetworkWatch() {
+        runCatching {
+            unregisterNetworkWatch()
+            val cm = (getSystemService(CONNECTIVITY_SERVICE) as? ConnectivityManager) ?: return
+            val request = NetworkRequest.Builder()
+                .addCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
+                .removeCapability(NetworkCapabilities.NET_CAPABILITY_NOT_VPN)  // include VPN networks
+                .build()
+            val cb = object : ConnectivityManager.NetworkCallback() {
+                override fun onAvailable(network: Network) = kick()
+                override fun onCapabilitiesChanged(network: Network, caps: NetworkCapabilities) {
+                    if (caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED) ||
+                        caps.hasTransport(NetworkCapabilities.TRANSPORT_VPN)) kick()
+                }
+            }
+            cm.registerNetworkCallback(request, cb)
+            netCallback = cb
+        }
+    }
+
+    private fun unregisterNetworkWatch() {
+        runCatching {
+            val cb = netCallback ?: return
+            netCallback = null
+            (getSystemService(CONNECTIVITY_SERVICE) as? ConnectivityManager)?.unregisterNetworkCallback(cb)
+        }
+    }
+
+    private fun kick() {
+        runCatching {
+            val now = SystemClock.elapsedRealtime()
+            if (!shouldKick(now, lastKick, Outbox(this).pendingCount())) return
+            lastKick = now
+            SyncWorker.enqueue(this)
+        }
+    }
+
+    override fun onDestroy() {
+        unregisterNetworkWatch()
+        super.onDestroy()
     }
 
     override fun onListenerDisconnected() {
         super.onListenerDisconnected()
+        unregisterNetworkWatch()
         Config(this).apply { listenerUp = false; listenerAt = System.currentTimeMillis() }
         runCatching { requestRebind(ComponentName(this, BankNotificationListener::class.java)) }
     }
@@ -64,5 +117,10 @@ class BankNotificationListener : NotificationListenerService() {
 
     companion object {
         private const val SNOOZE_CHECK_MS = 8_000L
+        private const val KICK_GAP_MS = 20_000L
+
+        /** Pure debounce decision: something is waiting and the last kick was at least 20 s ago. */
+        internal fun shouldKick(now: Long, last: Long, pending: Int): Boolean =
+            pending > 0 && (last == 0L || now - last >= KICK_GAP_MS)
     }
 }
