@@ -95,7 +95,7 @@ async def run(topic: str, http: httpx.AsyncClient | None = None) -> dict[str, An
     s = get_settings()
     if not enabled():
         raise ResearchError("research is not set up")
-    body = {"task": topic, "report_type": "research_report", "report_source": "web", "tone": "Objective", "generate_in_background": False}
+    body = {"task": topic, "report_type": "research_report", "report_source": "web", "tone": "Objective", "repo_name": "", "branch_name": "", "generate_in_background": False}
     own = http is None
     http = http or httpx.AsyncClient(timeout=s.research_timeout_s)
     try:
