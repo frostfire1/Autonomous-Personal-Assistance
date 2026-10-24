@@ -117,6 +117,48 @@ class BankAppsTest {
     }
 }
 
+class InternationalFilterTest {
+    private val bank = "com.bca"
+
+    @Test fun amountsInOtherCurrenciesAreDetected() {
+        assertTrue(NotificationFilter.accept(bank, "You paid USD 12.50 to Coffee Shop"))
+        assertTrue(NotificationFilter.accept(bank, "Card purchase of \$45.20 at Tesco completed"))
+        assertTrue(NotificationFilter.accept(bank, "Payment of 12.50 EUR successful"))
+        assertTrue(NotificationFilter.accept(bank, "You sent €30 to Anna"))
+        assertTrue(NotificationFilter.accept(bank, "Pembayaran RM 25.00 berhasil"))
+        assertTrue(NotificationFilter.accept(bank, "Transfer of 50,000 VND successful"))
+        assertTrue(NotificationFilter.accept(bank, "Pembayaran Rp 18.000 berhasil"))
+    }
+
+    @Test fun noAmountIsStillIgnored() {
+        assertFalse(NotificationFilter.accept(bank, "Your card was used at Tesco"))
+        assertFalse(NotificationFilter.accept(bank, "Welcome back"))
+    }
+
+    @Test fun englishPromoOtpAndFailureAreDropped() {
+        assertFalse(NotificationFilter.accept(bank, "Get cashback up to \$50 on your first order"))
+        assertFalse(NotificationFilter.accept(bank, "20% off with voucher, spend USD 30"))
+        assertFalse(NotificationFilter.accept(bank, "Your verification code is 123456 for USD 40, do not share it"))
+        assertFalse(NotificationFilter.accept(bank, "Payment of \$20 declined"))
+        assertFalse(NotificationFilter.accept(bank, "Your statement is ready, total \$120.00"))
+        assertFalse(NotificationFilter.accept(bank, "Reminder: payment of GBP 40 is due"))
+    }
+}
+
+class InternationalBankAppsTest {
+    @Test fun internationalBankNamesAreRecognised() {
+        listOf("Revolut", "Wise", "PayPal", "Chase Mobile", "HSBC UK", "DBS digibank", "GCash", "Touch n Go eWallet", "Monzo", "N26").forEach {
+            assertTrue(it, id.frostfire.apa.listener.BankApps.looksLikeBank(it))
+        }
+    }
+
+    @Test fun internationalNonBanksAreNot() {
+        listOf("Spotify", "Google Maps", "Netflix", "Camera").forEach {
+            assertFalse(it, id.frostfire.apa.listener.BankApps.looksLikeBank(it))
+        }
+    }
+}
+
 class LocationPickTest {
     private val now = 10L * 60 * 60 * 1000 * 3
 

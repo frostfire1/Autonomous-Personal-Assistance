@@ -4,8 +4,8 @@ weather is for (a typed city, or the phone's GPS position). Same key as /ingest.
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from pydantic import BaseModel, Field
 
+from apa import currency, weather
 from apa import prefs as P
-from apa import weather
 from apa.core.db import SessionLocal
 from apa.gateway.routers.ingest import reason, require_ingest_key
 from apa.news import config as news_config
@@ -75,6 +75,7 @@ def _view(p: P.Prefs) -> dict:
     return {
         "prefs": p.model_dump(),
         "languages": [{"key": k, "label": v[0]} for k, v in P.LANGUAGES.items()],
+        "currencies": [{"key": c.code, "label": f"{c.code}: {c.name}"} for c in currency.CURRENCIES.values()],
     }
 
 
@@ -90,6 +91,7 @@ class PrefsIn(BaseModel):
     gps: bool | None = None
     topics: list[str] | None = None
     keywords: list[str] | None = None
+    currency: str | None = None
 
 
 @router.put("")
@@ -103,7 +105,7 @@ async def put_prefs(body: PrefsIn) -> dict:
         unknown = [x for x in body.topics if x not in catalog]
         if unknown:
             raise HTTPException(422, f"unknown topic {unknown[0]}")
-    for key in ("language", "voice", "topics", "keywords"):
+    for key in ("language", "voice", "topics", "keywords", "currency"):
         if (v := getattr(body, key)) is not None:
             data[key] = v
     if body.gps is not None:
@@ -124,6 +126,7 @@ async def put_prefs(body: PrefsIn) -> dict:
     except ValueError as e:
         raise HTTPException(422, reason(e)) from None
     await P.save(SessionLocal, new)
+    currency.set_active(new.currency)  # this process now; the others within a minute
     return await _view_async(new)
 
 

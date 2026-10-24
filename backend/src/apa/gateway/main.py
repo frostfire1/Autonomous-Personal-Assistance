@@ -3,6 +3,8 @@ from contextlib import asynccontextmanager
 from arq import create_pool
 from fastapi import FastAPI
 
+from apa import currency
+from apa.core.db import SessionLocal
 from apa.core.logging import configure_logging
 from apa.core.redis import arq_redis_settings
 from apa.gateway.routers import briefing, dashboard, health, ingest, inspect, llm, news, prefs, prices, setup
@@ -14,7 +16,9 @@ async def lifespan(app: FastAPI):
     configure_logging()
     app.state.arq = await create_pool(arq_redis_settings())
     app.state.llm = LLMClient()
+    refresher = currency.start_refresher(SessionLocal)
     yield
+    refresher.cancel()
     await app.state.llm.aclose()
     await app.state.arq.aclose()
 

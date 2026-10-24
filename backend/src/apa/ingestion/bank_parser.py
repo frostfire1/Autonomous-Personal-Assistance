@@ -12,6 +12,8 @@ import re
 from dataclasses import dataclass
 from decimal import Decimal, InvalidOperation
 
+from apa import currency
+
 # Banking and wallet apps whose notifications are listened to; every other package is ignored. Package names are the
 # best known ones, written from memory: a wrong or missing one is not a problem because the phone app can scan the
 # installed apps and register the owner's own choices (see apa.ingestion.packages).
@@ -38,24 +40,53 @@ PACKAGE_WALLET = {
     "com.telkom.mwallet": "linkaja",
 }
 
-# Rp 1.250.000,50 | Rp18.000 | IDR 18,000.00
-_AMOUNT = re.compile(
-    r"(?P<cur>Rp\.?|IDR)\s?(?P<num>\d{1,3}(?:[.,]\d{3})+(?:[.,]\d{1,2})?|\d+(?:[.,]\d{1,2})?)", re.I
-)
+class _AmountPattern:
+    """The amount pattern of the home currency: Rp 1.250.000,50 | Rp18.000 | IDR 18,000.00 for rupiah (the default), or the
+    marks of the chosen currency ($12.50, EUR 1.250,50, RM 8.00 ...). Only home-currency amounts are read; one in another
+    currency is not a ledger entry and falls through to review."""
+
+    _cache: dict[str, re.Pattern] = {}
+
+    def _re(self) -> re.Pattern:
+        code = currency.active()
+        if code not in self._cache:
+            num = r"(?P<num>\d{1,3}(?:[.,]\d{3})+(?:[.,]\d{1,2})?|\d+(?:[.,]\d{1,2})?)"
+            self._cache[code] = re.compile(rf"(?P<cur>{currency.marks_regex(code)})\s?{num}", re.I)
+        return self._cache[code]
+
+    def search(self, text: str) -> re.Match | None:
+        return self._re().search(text)
+
+    def finditer(self, text: str):
+        return self._re().finditer(text)
+
+
+_AMOUNT = _AmountPattern()
+
+
+def _value(m: re.Match) -> Decimal | None:
+    """The number of an amount match, in the home currency's number format (rupiah keeps its Indonesian rules)."""
+    code = currency.active()
+    if code == "IDR":
+        return parse_amount(m.group("num"), m.group("cur").rstrip("."))
+    return currency.parse_number(m.group("num"), code)
 
 _OUT_WORDS = re.compile(
     r"\b(transfer(?:\s+[\w-]+)?\s+ke|pembayaran|bayar|dibayar|pembelian|belanja|tarik tunai|top[\s-]?up|"
-    r"debit|keluar|berhasil dikirim|kirim ke|payment|purchase)\b",
+    r"debit|keluar|berhasil dikirim|kirim ke|payment|purchase|spent|paid|sent to|withdrawal|withdrew|charged|debited)\b",
     re.I,
 )
 _IN_WORDS = re.compile(
     r"\b(menerima|diterima|dana masuk|uang masuk|kredit|transfer masuk|masuk|terima dari|"
-    r"received|top[\s-]?up berhasil ke saldo)\b",
+    r"received|deposit(?:ed)?|credited|refund(?:ed)?|top[\s-]?up berhasil ke saldo)\b",
     re.I,
 )
 _CARD = re.compile(r"kartu\s+kredit", re.I)
 _FAIL_WORDS = re.compile(r"\b(gagal|dibatalkan|ditolak|failed|declined|expired|kedaluwarsa)\b", re.I)
-_OTP_WORDS = re.compile(r"\b(otp|kode verifikasi|jangan berikan|password|pin anda)\b", re.I)
+_OTP_WORDS = re.compile(
+    r"\b(otp|kode verifikasi|jangan berikan|password|pin anda|verification code|one[\s-]?time|do not share|passcode|security code)\b",
+    re.I,
+)
 
 _MERCHANT = re.compile(
     r"(?:\bke|\bdi|\bat|\bdari|\bfrom|\bmerchant:?)\s+(?P<m>[A-Z0-9][A-Za-z0-9 &'._\-/]{1,40}?)"
@@ -105,7 +136,7 @@ def parse_amount(raw: str, currency: str = "Rp") -> Decimal | None:
 
 def amounts_in(text: str) -> set[Decimal]:
     """Every 'Rp ...' / 'IDR ...' amount in `text`, parsed with the right number format."""
-    values = (parse_amount(m.group("num"), m.group("cur").rstrip(".")) for m in _AMOUNT.finditer(text))
+    values = (_value(m) for m in _AMOUNT.finditer(text))
     return {v for v in values if v is not None}
 
 
@@ -113,7 +144,7 @@ def _first_amount(text: str) -> tuple[Decimal, int] | None:
     m = _AMOUNT.search(text)
     if not m:
         return None
-    value = parse_amount(m.group("num"), m.group("cur").rstrip("."))
+    value = _value(m)
     return (value, m.end()) if value is not None else None
 
 
@@ -158,26 +189,30 @@ _PROMO = re.compile(
     r"flash\s*sale|sale|dapatkan|ajukan|pinjaman|kta|kredit\s+tanpa|cicilan\s+0|bunga\s+\d|"
     r"s\s*&\s*k|syarat\s+(?:dan|&)\s+ketentuan|buruan|jangan\s+lewatkan|klaim|menang|selamat|berhak|"
     r"khusus\s+(?:untuk\s+)?anda|referral|ajak\s+teman|investasi|reksa\s*dana|asuransi|upgrade|naikkan\s+limit|"
-    r"pre-?approved|limited|kuota\s+terbatas)\b",
+    r"pre-?approved|limited|kuota\s+terbatas|offer|discount|\d+\s*%\s*off|congratulations|apply\s+now|"
+    r"limited[\s-]time|earn|rewards|win\s+a)\b",
     re.I,
 )
 # "hingga Rp 50 juta", "mulai dari Rp 10.000", "up to Rp ..": a price or a ceiling in an offer, never a payment made
 _OFFER_AMOUNT = re.compile(
     r"\b(hingga|sampai\s+dengan|s\.?d\.?|mulai\s+dari|up\s+to|senilai\s+hingga|maks(?:imal|\.)?|min(?:imal|\.)?\s+"
-    r"(?:transaksi|belanja|pembelian|top[\s-]?up))\s*(?:Rp\.?|IDR)",
+    r"(?:transaksi|belanja|pembelian|top[\s-]?up))\s*(?:Rp\.?|IDR|USD|US\$|\$|S\$|SGD|RM|MYR|EUR|€|GBP|£|JPY|¥|A\$|AUD|INR|₹|KRW|₩|CNY|THB|฿|PHP|₱|VND)",
     re.I,
 )
 # Bills and reminders: money is mentioned but none moved.
 _REMINDER = re.compile(
     r"\b(tagihan|jatuh\s+tempo|pengingat|reminder|minimum\s+payment|segera\s+(?:lunasi|bayar)|belum\s+dibayar|"
-    r"batas\s+waktu\s+pembayaran|cek\s+saldo|info\s+saldo|saldo\s+(?:anda|kamu))\b",
+    r"batas\s+waktu\s+pembayaran|cek\s+saldo|info\s+saldo|saldo\s+(?:anda|kamu)|payment\s+due|due\s+date|bill\s+is\s+ready|"
+    r"statement\s+is\s+ready|low\s+balance|available\s+balance|your\s+balance\s+is)\b",
     re.I,
 )
 # A confirmation that money actually moved: the only thing allowed to outweigh a promotional word.
 _CONFIRMED = re.compile(
     r"\b(?:(?:berhasil|sukses)\b.{0,40}\b(?:transfer|pembayaran|pembelian|top[\s-]?up|tarik\s+tunai|kirim|dikirim|dibayar|"
     r"debit)|(?:transfer|pembayaran|pembelian|top[\s-]?up|tarik\s+tunai|debit|bayar)\b.{0,60}\b(?:berhasil|sukses)|"
-    r"(?:menerima|diterima|dana\s+masuk|uang\s+masuk|transfer\s+masuk)\b)",
+    r"(?:menerima|diterima|dana\s+masuk|uang\s+masuk|transfer\s+masuk)\b|"
+    r"(?:payment|purchase|transfer|withdrawal|deposit)\b.{0,60}\b(?:successful|completed|approved)|"
+    r"\byou\s+(?:paid|spent|sent|received)\b|\b(?:debited|credited)\b)",
     re.I | re.S,
 )
 

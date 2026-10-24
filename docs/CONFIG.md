@@ -20,6 +20,20 @@ Two layers, on purpose:
 | Photo storage | Garage S3 (container) |
 | Database, queue | Postgres 17, Redis 7 (containers) |
 
+## Banks, wallets and currency (not only Indonesia)
+
+- **Home currency:** one ledger, one currency, no conversion. Default IDR (the blueprint). Choose another in **Settings** (IDR, USD, EUR,
+  GBP, JPY, SGD, MYR, AUD, INR, KRW, CNY, THB, PHP, VND). It sets how money is written (dashboard, Telegram, briefing) and which
+  bank-notification amounts are read: a notification in another currency is not a ledger entry and goes to review.
+- **Any bank or wallet app, any country:** on the phone, pick the apps to listen to. The picker lists apps that look like banks and has a
+  "Show all apps" button, so any app can be ticked. A ticked app is an approved wallet.
+- **Notification wording:** known Indonesian bank formats are read by rules. Anything else is matched by templates the system learns by itself
+  (after it has seen the same wording twice) or, for unfamiliar wording, read by the model, capped per hour. English wording
+  (spent, paid, received, deposited, refund...) is understood by the built-in rules.
+- **Known limits:** the receipt-photo reading and the shorthand ("18k", "1,5jt") still assume whole numbers, so currencies with cents
+  lose the decimals there; and the Indonesian bank labels (BCA, Mandiri...) are display names only. Changing the currency does not
+  convert old entries.
+
 ## What you can change, and where
 
 | What | Where |

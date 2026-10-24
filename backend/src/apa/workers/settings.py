@@ -13,6 +13,7 @@ from zoneinfo import ZoneInfo
 import httpx
 from arq import Retry, cron
 
+from apa import currency
 from apa.chat import batch, batch_flow
 from apa.core.db import SessionLocal
 from apa.core.logging import configure_logging, get_logger
@@ -386,6 +387,7 @@ async def startup(ctx: dict) -> None:
     s = get_settings()
     ctx["llm"] = LLMClient()
     ctx["store"] = DynamicEvidenceStore(s)
+    ctx["currency_task"] = currency.start_refresher(SessionLocal)  # keep the home currency fresh
     if s.telegram_bot_token:
         from aiogram import Bot
 

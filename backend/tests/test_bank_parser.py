@@ -236,3 +236,87 @@ def test_a_credit_card_payment_is_never_read_as_money_coming_in():
     q = parse_notification("com.bca", "Kredit masuk Rp 50.000 ke rekening Anda")
     assert q is not None and q.direction == "in"
 
+
+
+# ---- a home currency other than rupiah ---------------------------------------------------------------------------------------
+
+
+@pytest.fixture
+def home_currency():
+    from apa import currency
+
+    def use(code):
+        currency.set_active(code)
+
+    yield use
+    currency.set_active("IDR")
+
+
+def test_money_is_written_in_the_home_currency(home_currency):
+    from decimal import Decimal
+
+    from apa import currency
+    from apa.core.format import rupiah
+
+    assert rupiah(1250000) == "Rp 1.250.000"  # the default, unchanged
+    for code, amount, text in (("USD", Decimal("1250.5"), "$1,250.50"), ("EUR", Decimal("1250.5"), "€1.250,50"),
+                               ("JPY", 1250, "¥1,250"), ("MYR", Decimal("8"), "RM 8.00"), ("VND", 50000, "50.000₫")):
+        home_currency(code)
+        assert rupiah(amount) == text == currency.fmt(amount)
+    assert currency.fmt(Decimal("-3.5"), "USD") == "-$3.50"
+
+
+def test_numbers_follow_the_currencys_own_convention():
+    from decimal import Decimal
+
+    from apa import currency
+
+    p = currency.parse_number
+    assert p("1,250.50", "USD") == Decimal("1250.50") and p("1.250,50", "EUR") == Decimal("1250.50")
+    assert p("1,250", "USD") == Decimal("1250") and p("12.5", "USD") == Decimal("12.5")  # a lone separator and 3 digits = thousands
+    assert p("1.250.000", "IDR") == Decimal("1250000") and p("1,250", "JPY") == Decimal("1250")
+    assert p("abc", "USD") is None and p("0", "USD") is None
+
+
+def test_the_parser_reads_amounts_in_the_home_currency_only(home_currency):
+    from decimal import Decimal
+
+    from apa.ingestion.bank_parser import parse_notification
+
+    pkg = "com.example.bank"  # an app of any country: the owner ticked it, so it is an approved wallet
+    wallets = {pkg: "bank_example"}
+    rupiah_text = "Payment to Starbucks Rp 58.300 successful"
+    assert parse_notification(pkg, rupiah_text, wallets).amount == Decimal("58300")  # rupiah ledger: as before
+    home_currency("USD")
+    got = parse_notification(pkg, "You spent $12.50 at Starbucks", wallets)
+    assert got is not None and got.amount == Decimal("12.50") and got.direction == "out"
+    assert parse_notification(pkg, "You received $1,250.00 from ACME Payroll", wallets).amount == Decimal("1250.00")
+    assert parse_notification(pkg, rupiah_text, wallets) is None  # a rupiah amount is not a dollar ledger entry
+    home_currency("EUR")
+    assert parse_notification(pkg, "Card payment at Lidl EUR 23,40 charged", wallets).amount == Decimal("23.40")
+
+
+def test_prefs_accept_every_listed_currency_and_refuse_others():
+    from apa.currency import CURRENCIES
+    from apa.prefs import Prefs
+
+    assert Prefs().currency == "IDR"  # the blueprint default
+    for code in CURRENCIES:
+        assert Prefs(currency=code.lower()).currency == code
+    with pytest.raises(ValueError):
+        Prefs(currency="XXX")
+
+
+def test_english_promotions_codes_and_reminders_are_skipped_but_real_payments_are_not(home_currency):
+    from apa.ingestion.bank_parser import classify_skip
+
+    home_currency("USD")
+    for text, why in (
+        ("Your verification code is 123456. Do not share it. Pay $5", "otp_or_credential"),
+        ("Get 20% off up to $50 cashback this weekend", "promo"),
+        ("Your statement is ready. Minimum payment $25.00 due date Friday", "reminder"),
+        ("Transfer of $20.00 failed", "failed_or_cancelled"),
+    ):
+        assert classify_skip(text) == why, text
+    assert classify_skip("You paid $12.50 at Starbucks. Earn rewards points!") is None  # a confirmed payment outweighs the promo word
+    assert classify_skip("Payment of $12.50 to ACME was successful") is None

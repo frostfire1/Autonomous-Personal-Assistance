@@ -15,5 +15,8 @@ WALLET_LABEL = {
 
 
 def rupiah(x: Decimal | int | float) -> str:
-    """Rp 1.250.000 (Indonesian thousands separator, no decimals)."""
-    return f"Rp {x:,.0f}".replace(",", ".")
+    """Money in the ledger's home currency: 'Rp 1.250.000' by default (the name is historical; the owner can choose another
+    currency in the dashboard, see apa.currency)."""
+    from apa import currency
+
+    return currency.fmt(x)

@@ -12,12 +12,14 @@ type Prefs = {
   gps: boolean;
   topics: string[];
   keywords: string[];
+  currency: string;
 };
 type Voice = { key: string; label: string; engine: string; gender: string };
 type PrefsView = {
   prefs: Prefs;
   languages: { key: string; label: string }[];
   topics: { key: string; label: string }[];
+  currencies?: { key: string; label: string }[];
   voices: Voice[];
 };
 
@@ -105,6 +107,16 @@ export default function SettingsPage() {
               </select>
             </label>
           </div>
+          {view.currencies && (
+            <div className="row">
+              <label>Home currency{" "}
+                <select value={form.currency} onChange={(e) => { const currency = e.target.value; setForm({ ...form, currency }); save({ currency }); }}>
+                  {view.currencies.map((c) => <option key={c.key} value={c.key}>{c.label}</option>)}
+                </select>
+              </label>
+            </div>
+          )}
+          <p className="muted">One ledger, one currency, no conversion. It sets how money is written and which bank-notification amounts are read (a notification in another currency is not recorded). Reload this page after changing it.</p>
           <div className="row">
             <label>Voice{" "}
               <select value={form.voice} onChange={(e) => { const voice = e.target.value; setForm({ ...form, voice }); save({ voice }); }}>

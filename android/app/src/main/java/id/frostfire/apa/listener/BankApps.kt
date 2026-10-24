@@ -18,6 +18,10 @@ object BankApps {
         "octo", "cimb", "permata", "danamon", "bsi", "syariah", "seabank", "neo", "allo", "superbank", "ovo", "dana",
         "gopay", "linkaja", "shopeepay", "digibank", "ocbc", "btn", "mega", "maybank", "panin", "uob", "sinarmas",
         "bjb", "bpd", "nobu", "aladin", "line bank", "krom", "saqu", "motion",
+        // international banks, cards and wallets
+        "wallet", "pay", "card", "credit", "finance", "revolut", "wise", "paypal", "chase", "citi", "hsbc", "dbs", "grab",
+        "paytm", "gcash", "maya", "touch n go", "tng", "kakao", "toss", "paypay", "rakuten", "wells", "barclays", "monzo",
+        "n26", "ing", "santander", "bbva",
     )
 
     /** Apps in the list that are not banks even though a keyword appears in their name. */
@@ -29,14 +33,16 @@ object BankApps {
         return KEYWORDS.any { k -> Regex("""(^|[^a-z])${Regex.escape(k)}([^a-z]|$)""").containsMatchIn(l) }
     }
 
-    /** Launchable installed apps that look like banks or wallets, plus any built-in one that is installed. */
-    fun scan(ctx: Context): List<BankApp> {
+    /** Every launchable installed app, so the owner can tick any app of any country. */
+    fun scanAll(ctx: Context): List<BankApp> {
         val pm = ctx.packageManager
         val launcher = Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER)
         return pm.queryIntentActivities(launcher, PackageManager.MATCH_ALL)
             .map { BankApp(it.activityInfo.packageName, it.loadLabel(pm).toString(), it.activityInfo.packageName in NotificationFilter.PACKAGES) }
             .distinctBy { it.packageName }
-            .filter { it.builtIn || looksLikeBank(it.label) }
             .sortedBy { it.label.lowercase() }
     }
+
+    /** Launchable installed apps that look like banks or wallets, plus any built-in one that is installed. */
+    fun scan(ctx: Context): List<BankApp> = scanAll(ctx).filter { it.builtIn || looksLikeBank(it.label) }
 }

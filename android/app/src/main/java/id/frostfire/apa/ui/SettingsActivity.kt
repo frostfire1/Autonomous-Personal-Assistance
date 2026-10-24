@@ -60,6 +60,9 @@ class SettingsActivity : ComponentActivity() {
     private var player: MediaPlayer? = null
     private lateinit var langSpin: Spinner
     private lateinit var voiceSpin: Spinner
+    private lateinit var currencySpin: Spinner
+    private lateinit var currencyLabel: TextView
+    private var currencyKeys = listOf<String>()
     private lateinit var gpsBox: CheckBox
     private lateinit var cityField: EditText
     private lateinit var bgStatus: TextView
@@ -182,6 +185,9 @@ class SettingsActivity : ComponentActivity() {
             override fun onNothingSelected(p: AdapterView<*>?) = Unit
         }
         voiceSpin = Spinner(this).also(col::addView)
+        currencyLabel = label("Currency for amounts in the briefing").also { it.visibility = View.GONE }
+        currencySpin = Spinner(this).also(col::addView)
+        currencySpin.visibility = View.GONE
         label("News topics and followed keywords")
         topicsText = TextView(this).also(col::addView)
         button("Choose news topics") { pickTopics() }
@@ -299,6 +305,19 @@ class SettingsActivity : ComponentActivity() {
                 }
                 langSpin.setSelection(langKeys.indexOf(p.getString("language")).coerceAtLeast(0))
                 voiceSpin.setSelection(voiceKeys.indexOf(saved).coerceAtLeast(0))
+                val curs = j.optJSONArray("currencies")
+                if (curs != null && curs.length() > 0) {
+                    currencyKeys = (0 until curs.length()).map { curs.getJSONObject(it).getString("key") }
+                    currencySpin.adapter = ArrayAdapter(this@SettingsActivity, android.R.layout.simple_spinner_dropdown_item,
+                        (0 until curs.length()).map { curs.getJSONObject(it).getString("label") })
+                    currencySpin.setSelection(currencyKeys.indexOf(p.optString("currency", "IDR")).coerceAtLeast(0))
+                    currencyLabel.visibility = View.VISIBLE
+                    currencySpin.visibility = View.VISIBLE
+                } else {
+                    currencyKeys = emptyList()
+                    currencyLabel.visibility = View.GONE
+                    currencySpin.visibility = View.GONE
+                }
                 val tops = j.optJSONArray("topics")
                 if (tops != null) {
                     topicKeys = (0 until tops.length()).map { tops.getJSONObject(it).getString("key") }
@@ -353,6 +372,9 @@ class SettingsActivity : ComponentActivity() {
             .put("voice", voiceKeys[voiceSpin.selectedItemPosition]).put("gps", gps)
             .put("topics", org.json.JSONArray(topicKeys.filterIndexed { i, _ -> topicOn.getOrElse(i) { false } }))
             .put("keywords", org.json.JSONArray(keywordsField.text.split(",").map { it.trim() }.filter { it.isNotEmpty() }))
+        if (currencyKeys.isNotEmpty() && currencySpin.selectedItemPosition in currencyKeys.indices) {
+            body.put("currency", currencyKeys[currencySpin.selectedItemPosition])
+        }
         if (!gps && cityField.text.isNotBlank()) body.put("city", cityField.text.toString().trim())
         cfg.gpsWeather = gps
         lifecycleScope.launch {
@@ -395,15 +417,22 @@ class SettingsActivity : ComponentActivity() {
     }
 
     /** Lists the banking and wallet apps found on this phone; the ticked ones are listened to (the rest are ignored). */
-    private fun pickBankApps() {
-        val found = BankApps.scan(this)
+    private fun pickBankApps(showAll: Boolean = false, keep: Set<String>? = null) {
+        val found = if (showAll) BankApps.scanAll(this) else BankApps.scan(this)
         if (found.isEmpty()) {
             status.text = "No known bank apps found on this phone."
             return
         }
         val saved = cfg.pickedPackages
-        val ticked = BooleanArray(found.size) { found[it].builtIn || found[it].packageName in saved || saved.isEmpty() }
-        AlertDialog.Builder(this)
+        val ticked = BooleanArray(found.size) {
+            val p = found[it]
+            when {
+                keep != null -> p.builtIn || p.packageName in keep
+                showAll -> p.builtIn || p.packageName in saved || (saved.isEmpty() && BankApps.looksLikeBank(p.label))
+                else -> p.builtIn || p.packageName in saved || saved.isEmpty()
+            }
+        }
+        val builder = AlertDialog.Builder(this)
             .setTitle("Apps whose notifications are read")
             .setMultiChoiceItems(found.map { it.label + if (it.builtIn) "" else "  (new)" }.toTypedArray(), ticked) { _, i, on -> ticked[i] = on }
             .setPositiveButton("Save") { _, _ ->
@@ -419,7 +448,12 @@ class SettingsActivity : ComponentActivity() {
                 }
             }
             .setNegativeButton("Cancel", null)
-            .show()
+        if (!showAll) {
+            builder.setNeutralButton("Show all apps") { _, _ ->
+                pickBankApps(true, found.filterIndexed { i, _ -> ticked[i] }.map { it.packageName }.toSet())
+            }
+        }
+        builder.show()
     }
 
     private fun refresh() {
