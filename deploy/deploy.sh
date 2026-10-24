@@ -179,6 +179,8 @@ status() { $CE ps -a --format 'table {{.Names}}\t{{.Status}}\t{{.Ports}}'; }
 backup() {  # a compressed dump of the database into BACKUP_DIR (default ./backups); files older than BACKUP_KEEP_DAYS (14) are removed
   [ "$DB_MODE" = bundled ] || { echo "backup: DB_MODE=external, dump your own database with your own tools"; exit 1; }
   local dir="${BACKUP_DIR:-$ROOT/backups}" f
+  # with BACKUP_REQUIRE_FILE set (a marker file on the backup disk), nothing is written while that disk is not mounted
+  [ -z "${BACKUP_REQUIRE_FILE:-}" ] || [ -e "$BACKUP_REQUIRE_FILE" ] || { echo "backup: $BACKUP_REQUIRE_FILE is missing, the backup disk is not mounted"; exit 1; }
   mkdir -p "$dir"; chmod 700 "$dir"
   f="$dir/apa-$(date +%Y%m%d-%H%M%S).sql.gz"
   $CE exec postgres pg_dump -U "$PG_USER" -d "$PG_DB" --no-owner | gzip > "$f.tmp" && mv "$f.tmp" "$f" || { rm -f "$f.tmp"; echo "backup failed"; exit 1; }

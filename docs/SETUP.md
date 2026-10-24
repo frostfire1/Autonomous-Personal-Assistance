@@ -90,7 +90,7 @@ Everything lives in named volumes: `apa-pgdata` (Postgres), `apa-redisdata`, `ap
 **Database:** `./deploy.sh backup` writes a compressed dump to `BACKUP_DIR` (default `./backups`, readable only by root) and removes
 dumps older than `BACKUP_KEEP_DAYS` (14). Run it nightly from cron, for example
 `10 3 * * * cd /opt/apa && ./deploy.sh backup >> /var/log/apa-backup.log 2>&1`. Point `BACKUP_DIR` at another disk (an HDD) to keep
-copies off the system disk, and copy the folder to another machine now and then: a backup on the same disk does not survive the disk.
+copies off the system disk, and set `BACKUP_REQUIRE_FILE` to a marker file on that disk so nothing is written to the system disk while it is unmounted, and copy the folder to another machine now and then: a backup on the same disk does not survive the disk.
 Restore into an empty database with `gunzip -c apa-YYYYMMDD-HHMMSS.sql.gz | podman exec -i postgres psql -U apa_owner -d apa`.
 
 **The keys:** copy `.env` somewhere safe, **separately from the dumps**. It holds `SECRETS_KEY`: the diary, memory and stored tokens in a
