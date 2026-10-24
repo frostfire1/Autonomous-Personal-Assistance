@@ -892,3 +892,46 @@ async def test_a_day_snapshot_is_built_from_everything_stored_searched_and_feeds
     assert await daily.persona(stack, Llm(), day) == "written" and await daily.persona(stack, Llm(), day) == "unchanged"
     async with stack() as s:
         assert "Loves games" in (await s.execute(select(ProfileTrait.summary).where(ProfileTrait.key == "ai.persona"))).scalar_one()
+
+
+async def test_the_about_me_dataset_is_one_card_the_owner_can_edit_lock_and_export(stack):
+    from datetime import datetime
+
+    from apa import about, profile
+    from apa import assistant_memory as mem
+    from apa.db.models.intel import ProfileTrait
+
+    # the owner states how they like to be talked to: locked, and it beats the measured style
+    assert await about.set_fact(stack, "comfort", "language", "Indonesian, casual", src="owner") == "saved"
+    assert await about.set_fact(stack, "comfort", "language", "formal English", src="ai") == "locked"  # the AI cannot change it
+    assert await about.forget_fact(stack, "comfort", "language") == "locked" and await about.comfort(stack) == {"language": "Indonesian, casual"}
+    assert "Write in Indonesian, casual." in await profile.style_guide(stack)
+    # the assistant writes what it learned, with evidence; a rewrite replaces it
+    assert await about.set_fact(stack, "hobbies", "favourite_game", "Mobile Legends", src="ai", why="played 2 h a day") == "saved"
+    assert await about.set_fact(stack, "hobbies", "favourite_game", "Magic Chess", src="ai") == "saved"
+    await mem.remember(stack, "I am vegetarian")
+    await mem.add_learned(stack, datetime.now(TZ).date(), [{"kind": "goal", "text": "wants to run a 10k"}])
+    async with stack() as s:
+        s.add(ProfileTrait(key="hobbies", summary="Free time goes to games 40%.", data={}, evidence=9))
+        await s.commit()
+    await about.note_name(stack, "Joe")
+    await about.note_name(stack, "Someone else")  # the first name stays
+    card = await about.card(stack)
+    by = {(e["domain"], e["key"]): e for e in card}
+    assert by[("hobbies", "favourite_game")]["value"] == "Magic Chess" and by[("identity", "name")]["value"] == "Joe"
+    assert {e["domain"] for e in card} >= {"comfort", "hobbies", "identity", "goals", "notes"} and by[("hobbies", "hobbies")]["editable"] is False
+    text = await about.person_card(stack)
+    assert "(set by the owner)" in text and "wants to run a 10k" in text and "vegetarian" not in text  # notes are shown in their own block
+
+    # the owner edits and deletes from the dashboard; a computed trait cannot be edited, only overridden
+    fact = by[("hobbies", "favourite_game")]
+    learned = next(e for e in card if e["domain"] == "goals")
+    assert await about.update_item(stack, fact["ref"], "Delta Force") and await about.update_item(stack, learned["ref"], "wants to run a half marathon")
+    assert not await about.update_item(stack, "trait:hobbies", "x") and not await about.update_item(stack, "fact:999999", "x")
+    after = {(e["domain"], e["key"]): e for e in await about.card(stack)}
+    assert after[("hobbies", "favourite_game")]["value"] == "Delta Force" and after[("hobbies", "favourite_game")]["locked"] is True  # an owner edit locks it
+    assert any(e["value"] == "wants to run a half marathon" for e in after.values())
+    assert await about.delete_item(stack, fact["ref"]) and await about.delete_item(stack, learned["ref"]) and not await about.delete_item(stack, fact["ref"])
+    rows = await about.export_rows(stack)
+    assert {"id", "domain", "key", "value", "source", "confidence", "locked", "evidence", "updated"} == set(rows[0])
+    assert about.export_jsonl(rows).count("\n") == len(rows)

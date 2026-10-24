@@ -381,7 +381,7 @@ async def search_diary(sm: async_sessionmaker, query: str | None, days: int) -> 
 
 # ---- learned items ----------------------------------------------------------------------------------------------------------
 
-_LEARNED = ~MemoryItem.kind.in_(("note", "diary", "journal", OBS, WATCH, DAY))
+_LEARNED = ~MemoryItem.kind.in_(("note", "diary", "journal", OBS, WATCH, DAY, "fact"))
 
 
 async def learned(sm: async_sessionmaker) -> list[dict]:

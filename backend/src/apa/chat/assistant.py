@@ -31,7 +31,11 @@ CONTEXT_CHARS = 2600
 
 MEMORY_TOOL_DOC = """Memory tools (they take effect at once; then answer):
 - remember {"fact": string}  a short note about the owner, in their words
-- forget {"index": number}   remove item number N of WHAT YOU REMEMBER"""
+- forget {"index": number}   remove item number N of WHAT YOU REMEMBER
+- about_set {"domain": string, "key": string, "value": string, "why": string}  write one fact about the owner into their card.
+  domains: identity, comfort (language, tone, length, emoji, nickname), personality, hobbies, tastes, routines, wellbeing, money, people,
+  goals, plans. Only what the owner said or clearly showed ("why" = the evidence in a few words). Never overwrites what the owner locked.
+- about_forget {"domain": string, "key": string}  remove a fact you wrote (not one the owner set)"""
 
 SYSTEM = (
     "You are APA, the owner's personal assistant (money, health, news, security and plain conversation). Answer in the "
@@ -51,6 +55,10 @@ SYSTEM = (
     "they follow) and never recite statistics. Be aware of the time of day and of their wellbeing: when it fits, ask about food, "
     "sleep, rest or stress, give one small practical idea, and keep medical talk to common sense (never a diagnosis; a doctor "
     "only if something keeps repeating). Remember what they told you and build on it instead of asking again.\n"
+    "WHO THE OWNER IS is one card about them. Entries marked (set by the owner) are certain; the rest may be out of date: "
+    "if something you are about to rely on looks outdated or contradicts what they say now, ask lightly instead of assuming. When "
+    "they tell you something lasting about themselves (their name or nickname, how they like you to talk, a hobby, a taste, a "
+    "goal, a person in their life), save it with about_set. If they tell you how they want you to talk, save it under comfort.\n"
     "The owner has a PRIVATE diary you cannot read. If they start writing a diary entry or a very personal confidence in this "
     "chat, tell them to use /diary (Telegram) or the Diary page in the dashboard so it stays encrypted and is never sent to an "
     "AI; chat messages are not private in that way.\n"
@@ -93,16 +101,14 @@ async def _context(sm, tz: ZoneInfo, now: datetime, history_block: str, reply_to
         if tm is not None:
             replied = f"The owner is replying to this earlier message of yours: «{(tm.body or '')[:300]}»" + (
                 f" (about transaction #{tm.transaction_id})" if tm.transaction_id else "") + "\n"
-    from apa import profile
+    from apa import about, profile
 
-    traits_block = await profile.block(sm)
-    profile_block = f"WHAT YOUR DATA SAYS ABOUT THE OWNER (computed, trustworthy; use it for advice):\n{traits_block}\n" if traits_block else ""
+    card_text = await about.person_card(sm, 2800)
+    profile_block = f"WHO THE OWNER IS (one card; computed and noticed entries may be out of date):\n{card_text}\n" if card_text else ""
     diary = (await assistant_memory.episodes(sm))[-7:]
     diary_block = ("YOUR DIARY (summaries of earlier days; use the recall look-up for details):\n" + "\n".join(
         f"{e['date']}: {e['summary']}" for e in diary)[-1500:] + "\n") if diary else ""
-    items = (await assistant_memory.learned(sm))[-25:]
-    learned_block = ("WHAT YOU HAVE LEARNED about the owner from past chats (may be out of date):\n" + "\n".join(
-        f"- [{i['kind']}] {i['text']}" for i in items)[-1500:] + "\n") if items else ""
+    learned_block = ""  # learned items are part of the card
     shared = await assistant_memory.shared_journal(sm, 5)
     shared_block = ("DIARY ENTRIES THE OWNER CHOSE TO SHARE WITH YOU:\n" + "\n".join(f"{e['date']}: {e['text']}" for e in shared)[-1500:] + "\n") if shared else ""
     notes = await assistant_memory.load(sm)
@@ -143,6 +149,19 @@ async def converse(
         if name in READ_TOOLS and not final:
             result = await run_read(sm, tz, now, name, args)
             log.info("assistant_lookup", tool=name)
+            transcript += [f"TOOL {name} {json.dumps(args, ensure_ascii=False)[:200]}", f"RESULT:\n{result}"]
+            continue
+        if name in ("about_set", "about_forget") and not final:
+            from apa import about
+
+            if name == "about_set":
+                done = await about.set_fact(sm, str(args.get("domain", "other")), str(args.get("key", "")), str(args.get("value", "")),
+                                            src="ai", conf=65, why=str(args.get("why", "")))
+            else:
+                done = await about.forget_fact(sm, str(args.get("domain", "other")), str(args.get("key", "")))
+            result = {"saved": "Saved to the owner's card.", "locked": "The owner set that one: do not change it, ask them.", "off": "Memory is off: SECRETS_KEY is missing.",
+                      "empty": "Nothing to save.", "forgotten": "Removed.", "missing": "No such entry."}.get(done, done)
+            log.info("assistant_about", tool=name, result=done)
             transcript += [f"TOOL {name} {json.dumps(args, ensure_ascii=False)[:200]}", f"RESULT:\n{result}"]
             continue
         if name in ("remember", "forget") and not final:

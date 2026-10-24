@@ -221,7 +221,7 @@ async def _recall(sm, tz, now, a: RecallQ) -> str:
     )[: a.limit]
     diary = (await assistant_memory.search_diary(sm, a.query, a.days))[-5:]
     if a.query:  # full-text search over everything remembered (notes, learned items, diary), best match first
-        known = [i for i in await assistant_memory.search_items(sm, a.query, 8) if i["kind"] not in ("diary", "note", "day")]
+        known = [i for i in await assistant_memory.search_items(sm, a.query, 8) if i["kind"] not in ("diary", "note", "day", "fact")]
     else:
         known = (await assistant_memory.learned(sm))[-8:]
     day_hits = await assistant_memory.search_days(sm, a.query, max(a.days, 30), 4)

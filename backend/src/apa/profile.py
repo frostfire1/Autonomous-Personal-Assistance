@@ -225,18 +225,31 @@ def hobby_trait(categories: list[tuple[str, float]], apps: list[str], topics: li
 
 
 async def style_guide(sm: async_sessionmaker) -> str:
-    """Lines telling the assistant how to write to this owner (from the `style` trait and the briefing language)."""
+    """Lines telling the assistant how to write to this owner: what the owner said about it (their card, domain comfort) first, then
+    what was measured from how they write (the `style` trait)."""
+    from apa import about
+
+    stated = await about.comfort(sm)
     async with sm() as s:
         d = (await s.execute(select(ProfileTrait.data).where(ProfileTrait.key == "style"))).scalar_one_or_none()
-    if not d:
-        return "Reply in the language the owner writes in, warmly and briefly."
-    lines = [f"- Write in {d['lang']}{' (the owner mixes in English; that is fine)' if d.get('mixed') else ''}.",
-             f"- Keep it about as long as the owner's messages: around {max(8, d['words'] * 2)} words, never more than a short paragraph.",
-             "- Tone: " + ("casual and friendly, the way a friend texts (no stiff or formal wording)." if d.get("casual")
-                          else "friendly but a little more careful and complete."),
-             "- Emoji: " + ("use them freely." if d.get("emoji", 0) >= 0.3 else "one now and then at most." if d.get("emoji", 0) >= 0.08
-                            else "do not use emoji.")]
-    return "\n".join(lines)
+    lines: list[str] = []
+    if name := stated.get("nickname") or stated.get("name"):
+        lines.append(f"- Call the owner {name}.")
+    for key, text in (("language", "Write in {}."), ("tone", "Tone: {}."), ("length", "Length: {}."), ("emoji", "Emoji: {}.")):
+        if stated.get(key):
+            lines.append("- " + text.format(stated[key]))
+    if d:  # measured habits fill in what the owner did not state
+        if "language" not in stated:
+            lines.append(f"- Write in {d['lang']}{' (the owner mixes in English; that is fine)' if d.get('mixed') else ''}.")
+        if "length" not in stated:
+            lines.append(f"- Keep it about as long as the owner's messages: around {max(8, d['words'] * 2)} words, never more than a short paragraph.")
+        if "tone" not in stated:
+            lines.append("- Tone: " + ("casual and friendly, the way a friend texts (no stiff or formal wording)." if d.get("casual")
+                                       else "friendly but a little more careful and complete."))
+        if "emoji" not in stated:
+            lines.append("- Emoji: " + ("use them freely." if d.get("emoji", 0) >= 0.3 else "one now and then at most." if d.get("emoji", 0) >= 0.08
+                                         else "do not use emoji."))
+    return "\n".join(lines) or "Reply in the language the owner writes in, warmly and briefly."
 
 
 def usage_trait(rows: list[tuple[date, str, str, str, int, datetime | None]], tz: ZoneInfo) -> Trait | None:

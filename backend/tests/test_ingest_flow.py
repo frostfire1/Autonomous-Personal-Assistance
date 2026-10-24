@@ -829,3 +829,19 @@ def test_a_day_gets_plain_tags_from_its_facts_and_the_ai_reply_is_validated():
     assert out and out["personality"] == ["restless", "playful"] and out["mood"] == 4 and out["energy"] == "high"
     assert daily.parse_day('{"headline": "x"}') is None and daily.parse_day("nonsense") is None
     assert daily.parse_day('{"headline": "A calm day", "mood": 9, "energy": "wild"}')["mood"] is None
+
+
+# ---- About me: one dataset ---------------------------------------------------------------------------------------------------------
+
+
+def test_the_card_text_groups_by_domain_and_marks_what_the_owner_set():
+    from apa import about
+
+    entries = [
+        {"ref": "fact:1", "domain": "comfort", "key": "language", "value": "Indonesian, casual", "locked": True},
+        {"ref": "item:2", "domain": "tastes", "key": "learned_2", "value": "likes spicy food", "locked": False},
+        {"ref": "trait:ai.persona", "domain": "personality", "key": "ai.persona", "value": "Playful and curious.", "locked": False},
+    ]
+    text = about.render(entries)
+    assert text.splitlines() == ["[comfort]", "- language: Indonesian, casual (set by the owner)", "[tastes]", "- likes spicy food", "[personality]", "- Playful and curious."]
+    assert about.slug("Favourite Game!") == "favourite_game" and about._dom("nonsense") == "other"

@@ -42,6 +42,10 @@ async def ingest_text(arq: ArqRedis, message: Message) -> int | None:
     """Store a manual text entry as an event. Keyed on (chat, message id) so a redelivered
     Telegram update never creates a second transaction."""
     clean = sanitize_untrusted(message.text or "")
+    if message.from_user is not None:  # keep the name Telegram shows for the owner on their card (never overwrites one they set)
+        from apa import about
+
+        await _quietly(about.note_name(SessionLocal, message.from_user.first_name))
     async with SessionLocal() as session:
         return await store_and_enqueue(
             session,

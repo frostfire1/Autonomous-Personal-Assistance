@@ -5,7 +5,7 @@ import asyncio
 import io
 
 import httpx
-from fastapi import APIRouter, Body, Depends, HTTPException, Request
+from fastapi import APIRouter, Body, Depends, HTTPException, Request, Response
 from pydantic import BaseModel
 from sqlalchemy import text
 
@@ -329,6 +329,58 @@ async def profile_content(request: Request) -> dict:
 
     today = datetime.now(ZoneInfo(get_settings().timezone)).date()
     return {"result": await content.digest(SessionLocal, request.app.state.llm, today, force=True)}
+
+
+@router.get("/about")
+async def about_card() -> dict:
+    """The whole dataset about the owner, grouped by domain, for the About me page."""
+    from apa import about
+
+    entries = await about.card(SessionLocal)
+    return {"domains": list(about.DOMAINS), "entries": entries}
+
+
+@router.post("/about/fact")
+async def about_add(domain: str = Body(max_length=20), key: str = Body(max_length=60), value: str = Body(max_length=400),
+                    locked: bool = Body(default=True)) -> dict:
+    """The owner writes a fact (locked by default: the assistant can read it but never change it)."""
+    from apa import about
+
+    done = await about.set_fact(SessionLocal, domain, key, value, src="owner", conf=100, locked=locked)
+    if done == "off":
+        raise HTTPException(status_code=503, detail="SECRETS_KEY is not set, so nothing can be stored safely")
+    if done != "saved":
+        raise HTTPException(status_code=400, detail="a key and a value are needed")
+    return {"ok": True}
+
+
+@router.put("/about/item")
+async def about_edit(ref: str = Body(max_length=40), value: str = Body(max_length=400), locked: bool | None = Body(default=None)) -> dict:
+    from apa import about
+
+    if not await about.update_item(SessionLocal, ref, value, locked):
+        raise HTTPException(status_code=404, detail="no such editable entry")
+    return {"ok": True}
+
+
+@router.delete("/about/item")
+async def about_delete(ref: str) -> dict:
+    from apa import about
+
+    if not await about.delete_item(SessionLocal, ref):
+        raise HTTPException(status_code=404, detail="no such deletable entry")
+    return {"ok": True}
+
+
+@router.get("/about/export")
+async def about_export(format: str = "jsonl") -> Response:
+    """The dataset as JSON lines (domain, key, value, source, confidence, locked, evidence, updated): one stable shape to feed a
+    retrieval index or to train a model later. `format=card` gives the same as the text block the assistant reads."""
+    from apa import about
+
+    if format == "card":
+        return Response(await about.person_card(SessionLocal, 20000), media_type="text/plain; charset=utf-8")
+    return Response(about.export_jsonl(await about.export_rows(SessionLocal)), media_type="application/x-ndjson")
 
 
 @router.get("/days")
