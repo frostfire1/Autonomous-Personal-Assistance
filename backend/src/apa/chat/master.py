@@ -30,7 +30,9 @@ MASTER_SYSTEM = (
     "(labelling, dropping or changing items)\n"
     '- "ask": a question about their money; put the needed specialists in "agents" (usually exactly one, never '
     "more than two):\n" + "\n".join(f"    {k}: {v}" for k, v in ROLE_HINT.items()) + "\n"
-    '- "action": asks to ADD, EDIT, CHANGE or DELETE/CANCEL a recorded transaction, or to SET a budget\n'
+    '- "action": asks to ADD, EDIT, CHANGE or DELETE/CANCEL a recorded transaction, or to SET a budget. A short message that '
+    'only names what recent transactions were (a shop, a purpose, a source: "both from X", "the last two are for Y", "that was '
+    'lunch") with RECENT_TRANSACTIONS listed below is "action": the owner is labelling them, even with no amount\n'
     '- "chat": greetings, thanks, small talk, what can you do. Put a short friendly reply (at most 3 lines, in '
     'the user\'s language) in "reply"\n'
     f'- "unavailable": topics not built yet ({", ".join(NOT_BUILT)}) or anything outside personal finance; '
@@ -80,10 +82,13 @@ def parse_plan(raw: str, *, has_draft: bool, custom: dict | None = None) -> Plan
                 str(d.get("topic") or "")[:40])
 
 
-async def plan(llm: Any, text: str, history: list[dict], *, has_draft: bool, custom: dict | None = None) -> Plan:
+async def plan(
+    llm: Any, text: str, history: list[dict], *, has_draft: bool, custom: dict | None = None, recent: str = ""
+) -> Plan:
     res = await llm.complete(
         ROUTINE, system_for(custom),
-        f"DRAFT_OPEN: {str(has_draft).lower()}\nRecent chat:\n{_history_block(history)}\n\nMessage: {text}",
+        f"DRAFT_OPEN: {str(has_draft).lower()}\nRECENT_TRANSACTIONS:\n{recent or '(none in the last 2 hours)'}\n"
+        f"Recent chat:\n{_history_block(history)}\n\nMessage: {text}",
         json_mode=True, max_tokens=220, temperature=0, agent="A-00",
     )
     p = parse_plan(res.content, has_draft=has_draft, custom=custom)

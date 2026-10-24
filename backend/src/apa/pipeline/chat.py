@@ -167,7 +167,8 @@ async def run_master(
         history, draft = await load_history(redis), await batch.load_draft(redis)
         cfg = await llm.config() if hasattr(llm, "config") else None
         custom = cfg.active_custom() if cfg is not None else {}
-        p = await master.plan(llm, clean.text, history, has_draft=draft is not None, custom=custom)
+        recent = await _recent_lines(sm, sent_at)
+        p = await master.plan(llm, clean.text, history, has_draft=draft is not None, custom=custom, recent=recent)
         tokens = p.tokens
         reply, role = await _execute(sm, llm, redis, p, clean.text, history, draft, tz, sent_at, custom, reply_to)
     except LLM_ERRORS as e:
@@ -187,6 +188,22 @@ async def run_master(
         return "handoff"
     ok = await _finish(sm, notifier, redis, event_id, clean.text, reply, role, tokens, reason="chat")
     return "answered" if ok else "skipped"
+
+
+async def _recent_lines(sm, sent_at: datetime) -> str:
+    """The owner's committed transactions of the last 2 hours as '#id merchant amount time' lines, so the router can tell
+    that a short message is about them."""
+    from apa.core.format import rupiah
+
+    async with sm() as s:
+        txs = (await s.execute(
+            select(Transaction).where(
+                Transaction.status == "committed", Transaction.timestamp >= sent_at - timedelta(hours=2),
+                Transaction.timestamp <= sent_at + timedelta(minutes=5)).order_by(Transaction.timestamp.desc()).limit(5)
+        )).scalars().all()
+    return "\n".join(
+        f"#{t.id} {(t.merchant or '-')[:30]} {rupiah(t.total_paid_amount)} {t.direction} {t.timestamp:%H:%M}" for t in txs
+    )
 
 
 async def _described_transaction(sm, reply_to: int | None, sent_at: datetime) -> int | None:

@@ -305,3 +305,25 @@ def test_a_payment_described_without_an_amount_proposes_an_edit_of_the_recent_tr
     assert run("kopi susu 18k tunai") == (None, "transaction")  # with an amount it is a new payment, as before
     seen["tx"] = None
     assert run("beli makan nasgor sosis solaria") == (None, "transaction")  # nothing recent to describe: the extractor decides
+
+
+def test_the_router_is_shown_the_recent_transactions_and_told_a_short_reference_to_them_is_an_edit():
+    import asyncio
+
+    from apa.chat import master
+
+    seen = {}
+
+    class Llm:
+        async def complete(self, route, system, user, **kw):
+            seen["system"], seen["user"], seen["agent"] = system, user, kw.get("agent")
+            return type("R", (), {"content": '{"intent": "action", "agents": [], "reply": null, "topic": ""}',
+                                  "prompt_tokens": 1, "completion_tokens": 1})()
+
+    recent = "\n".join(["#7 - Rp 20.071 out 17:33", "#6 - Rp 20.071 out 17:31"])
+    got = asyncio.run(master.plan(Llm(), "2 2 nya dari kunci AI", [], has_draft=False, recent=recent))
+    assert got.intent == "action" and seen["agent"] == "A-00"
+    assert "RECENT_TRANSACTIONS:" in seen["user"] and "#7 - Rp 20.071" in seen["user"]
+    assert "labelling them" in seen["system"]
+    asyncio.run(master.plan(Llm(), "hello", [], has_draft=False))
+    assert "(none in the last 2 hours)" in seen["user"]
