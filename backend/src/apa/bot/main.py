@@ -49,7 +49,7 @@ async def ingest_text(arq: ArqRedis, message: Message) -> int | None:
             idempotency_key=f"tg:{message.chat.id}:{message.message_id}",
             payload={
                 "text": clean.text, "sent_at": message.date.isoformat(),
-                **({"reply_to": message.reply_to_message.message_id} if message.reply_to_message else {}),
+                **({"reply_to": r.message_id} if (r := getattr(message, "reply_to_message", None)) else {}),
             },
             clean=clean,
         )

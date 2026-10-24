@@ -115,9 +115,6 @@ async def test_recent_articles_come_back_with_their_topic_and_only_inside_the_wi
         s.add(NewsArticle(url="https://old", title="Berita lama sekali", dedup_hash="x" * 64, source="Antara",
                           published_at=NOW - timedelta(days=5)))
         await s.commit()
-    import apa.news.ingest as ing
-
-    ing.FEEDS = FEEDS  # the topic map follows the configured feeds
     arts = await recent_articles(stack, NOW)
     assert len(arts) == 5 and {a.topic for a in arts} == {"nasional", "cyber"}
     assert all("lama sekali" not in a.title for a in arts)
@@ -135,9 +132,7 @@ class Narrator:
 
 
 async def test_the_briefing_reads_greeting_money_sleep_news_and_cyber_in_order(stack, redis, monkeypatch):
-    import apa.news.ingest as ing
 
-    monkeypatch.setattr(ing, "FEEDS", FEEDS)
     await ingest_news(stack, scripted(news_routes()), redis, feeds=FEEDS)
     now = datetime.now(TZ)  # not pinned to an hour: the articles are stamped with the real time, so "now" must be real too
     yesterday_noon = now.replace(hour=0, minute=0, second=0, microsecond=0) - timedelta(hours=12)
@@ -162,9 +157,7 @@ async def test_the_briefing_reads_greeting_money_sleep_news_and_cyber_in_order(s
 
 
 async def test_the_same_story_is_summarised_once_and_cached(stack, redis, monkeypatch):
-    import apa.news.ingest as ing
 
-    monkeypatch.setattr(ing, "FEEDS", FEEDS)
     await ingest_news(stack, scripted(news_routes()), redis, feeds=FEEDS)
     llm = Narrator()
     await brief.build(stack, llm, redis, TZ, datetime.now(TZ), kind="short")
@@ -178,9 +171,7 @@ async def test_a_quiet_day_still_makes_a_briefing_and_a_model_outage_falls_back_
         async def complete(self, *a, **k):
             raise RuntimeError("down")
 
-    import apa.news.ingest as ing
 
-    monkeypatch.setattr(ing, "FEEDS", FEEDS)
     empty = await brief.build(stack, Down(), redis, TZ, datetime.now(TZ), kind="short")
     assert "Tidak ada berita nasional besar saat ini." in empty.text
     await ingest_news(stack, scripted(news_routes()), redis, feeds=FEEDS)
@@ -359,9 +350,7 @@ async def test_nvd_is_read_page_by_page_up_to_a_cap_and_a_failing_page_keeps_the
 
 
 async def test_the_spoken_cyber_line_gives_criticals_and_exploited_never_the_daily_total(stack, redis, monkeypatch):
-    import apa.news.ingest as ing
 
-    monkeypatch.setattr(ing, "FEEDS", FEEDS)
     async with stack() as s:
         for i in range(250):  # a normal NVD day: hundreds, almost all unremarkable
             s.add(CyberAdvisory(cve_id=f"CVE-2026-1{i:04d}", summary="x", cvss=Decimal("5.0"), tier="archive", source="nvd"))
@@ -376,9 +365,7 @@ async def test_the_spoken_cyber_line_gives_criticals_and_exploited_never_the_dai
 
 
 async def test_a_quiet_cve_day_says_so_in_one_short_line(stack, redis, monkeypatch):
-    import apa.news.ingest as ing
 
-    monkeypatch.setattr(ing, "FEEDS", FEEDS)
     async with stack() as s:
         s.add(CyberAdvisory(cve_id="CVE-2026-40001", summary="x", cvss=Decimal("5.0"), tier="archive", source="nvd"))
         await s.commit()
@@ -390,10 +377,8 @@ async def test_a_quiet_cve_day_says_so_in_one_short_line(stack, redis, monkeypat
 
 
 async def test_the_news_job_pushes_only_what_is_urgent_and_only_once(stack, redis, monkeypatch):
-    import apa.news.ingest as ing
     import apa.news.jobs as jobs
 
-    monkeypatch.setattr(ing, "FEEDS", FEEDS)
     monkeypatch.setattr(jobs, "ingest_news", lambda sm, c, r: ingest_news(sm, c, r, feeds=FEEDS))
     n, llm, c = FakeNotifier(), Narrator(), scripted(news_routes())
     first = await run_news_ingest(stack, llm, n, redis, datetime.now(UTC), client=c)
@@ -455,7 +440,6 @@ async def test_the_app_fetches_a_short_briefing_and_reports_that_it_played(api, 
 @pytest.fixture
 def fake_voice(monkeypatch):
     """Stands in for Microsoft: records what it was asked to say."""
-    from apa.tts import voice
 
     calls: list[str] = []
 
@@ -463,7 +447,7 @@ def fake_voice(monkeypatch):
         calls.append(text)
         return b"ID3" + b"x" * 600
 
-    monkeypatch.setattr(voice, "synthesize", synth)
+    _patch_synth(monkeypatch, synth)
     return calls
 
 
@@ -492,7 +476,7 @@ async def test_when_the_voice_fails_the_app_is_told_to_speak_itself(api, monkeyp
     async def down(text, **kw):
         raise voice.TtsError("ConnectionError")
 
-    monkeypatch.setattr(voice, "synthesize", down)
+    _patch_synth(monkeypatch, down)
     h = {"x-api-key": "k"}
     b = (await api.get("/briefing/short", headers=h)).json()
     assert (await api.get(f"/briefing/{b['id']}/audio/0", headers=h)).status_code == 503
@@ -541,7 +525,7 @@ async def test_the_morning_precompute_has_every_clip_ready_and_a_voice_outage_do
     async def down(text, **kw):
         raise voice.TtsError("x")
 
-    monkeypatch.setattr(voice, "synthesize", down)
+    _patch_synth(monkeypatch, down)
     await redis.flushdb()
     assert len(await run_briefing_precompute(stack, Narrator(), redis, TZ, datetime.now(TZ))) == 2
 
@@ -551,6 +535,42 @@ def _gemini_reply(pcm=b"\x01\x00" * 3000, mime="audio/L16;codec=pcm;rate=24000",
 
     body = {"candidates": [{"content": {"parts": [{"inlineData": {"mimeType": mime, "data": base64.b64encode(pcm).decode()}}]}}]}
     return status, body
+
+
+
+
+@pytest.fixture(autouse=True)
+def _configured_feeds(monkeypatch):
+    """The topic map follows the feeds of this file: the news config is a real NewsConfig whose active feeds are FEEDS."""
+    from apa.news import config as nc
+
+    class Cfg(nc.NewsConfig):
+        def active_feeds(self):
+            return FEEDS
+
+    async def current(sm=None):
+        return Cfg()
+
+    monkeypatch.setattr(nc, "current", current)
+
+@pytest.fixture(autouse=True)
+def _gemini_not_cooling_down():
+    """A 429 in one test must not make Gemini look rate-limited in the next (the cooldown is module state)."""
+    from apa.tts import voice
+
+    voice._gemini_blocked_until = 0.0
+    yield
+    voice._gemini_blocked_until = 0.0
+
+
+def _patch_synth(monkeypatch, fn):
+    """Replace the speech call with `fn(text, voice=, lang=) -> bytes`, as the engine that would have been tried first."""
+    from apa.tts import voice
+
+    async def ex(text, **kw):
+        return await fn(text, **kw), (voice.plan(kw.get("voice"), kw.get("lang", "id")) or [("edge", None)])[0][0]
+
+    monkeypatch.setattr(voice, "synthesize_ex", ex)
 
 
 def _patch_gemini(monkeypatch, reply, seen):
@@ -715,9 +735,7 @@ async def test_severe_cves_come_most_worrying_first_and_only_high_critical_or_ex
 
 
 async def test_the_voice_names_technology_and_version_for_the_worst_cves_but_not_their_numbers(stack, redis, monkeypatch):
-    import apa.news.ingest as ing
 
-    monkeypatch.setattr(ing, "FEEDS", FEEDS)
     await _severe_day(stack)
     b = await brief.build(stack, Narrator(), redis, TZ, datetime.now(TZ), kind="short")
     cyber = next(s for s in b.sections if s.topic == "cyber").text
@@ -727,10 +745,8 @@ async def test_the_voice_names_technology_and_version_for_the_worst_cves_but_not
 
 
 async def test_the_telegram_briefing_carries_more_than_the_voice(stack, redis, monkeypatch):
-    import apa.news.ingest as ing
     from apa.news.telegram import build_telegram
 
-    monkeypatch.setattr(ing, "FEEDS", FEEDS)
     await ingest_news(stack, scripted(news_routes()), redis, feeds=FEEDS)
     await _severe_day(stack)
     now = datetime.now(TZ)
@@ -822,7 +838,7 @@ async def test_a_briefing_is_made_once_a_day_whatever_the_hour_and_yesterdays_is
     first = await brief.get_or_build(stack, llm, redis, TZ, now)
     assert first.text != "old"  # yesterday's does not count as "made today"
     calls = len(llm.calls)
-    later = await brief.get_or_build(stack, llm, redis, TZ, now + timedelta(hours=9))  # many hours on: still today's
+    later = await brief.get_or_build(stack, llm, redis, TZ, max(now, now.replace(hour=23, minute=30)))  # hours on, same day: still today's
     assert later.id == first.id and len(llm.calls) == calls  # no text was made again
     assert (await brief.get_or_build(stack, llm, redis, TZ, now, reuse_since=now + timedelta(minutes=1))).id != first.id
 
@@ -932,10 +948,8 @@ async def test_the_briefing_gives_todays_budget_in_indonesian_by_default(stack, 
 
 
 async def test_the_briefing_is_written_in_english_when_the_owner_chose_english(stack, redis, monkeypatch):
-    import apa.news.ingest as ing
     from apa import prefs
 
-    monkeypatch.setattr(ing, "FEEDS", FEEDS)
     await ingest_news(stack, scripted(news_routes()), redis, feeds=FEEDS)  # stories exist, so stories get written
     await prefs.save(stack, prefs.Prefs(language="en", voice="puck"))
     await _seed_finance(stack)
@@ -1095,9 +1109,11 @@ async def test_the_preferences_api_needs_the_key_and_lists_the_choices(prefs_api
     assert (await prefs_api.get("/prefs")).status_code == 401
     assert (await prefs_api.put("/prefs", json={})).status_code == 401
     r = (await prefs_api.get("/prefs", headers=H)).json()
-    assert r["prefs"]["language"] == "id" and [x["key"] for x in r["languages"]] == ["id", "en"]
+    assert r["prefs"]["language"] == "id" and [x["key"] for x in r["languages"]] == ["id", "en", "ja", "zh", "ko", "de", "fr", "es"]
     voices = {v["key"]: v for v in r["voices"]}
-    assert {"zephyr", "puck", "kore", "gadis", "ardi"} <= set(voices) and voices["puck"]["engine"] == "gemini"
+    assert {"gemini:Zephyr", "gemini:Puck", "gemini:Kore"} <= set(voices) and voices["gemini:Puck"]["engine"] == "gemini"
+    assert any(v["engine"] == "edge" for v in r["voices"])  # Microsoft voices of the chosen language are listed too
+    assert [x["key"] for x in r["currencies"]][:2] == ["IDR", "USD"] and r["prefs"]["currency"] == "IDR"
 
 
 async def test_language_and_voice_can_be_changed_and_stick(stack, prefs_api):
@@ -1111,7 +1127,7 @@ async def test_language_and_voice_can_be_changed_and_stick(stack, prefs_api):
     assert (again.json()["prefs"]["language"], again.json()["prefs"]["voice"]) == ("en", "kore")
 
 
-@pytest.mark.parametrize("body", [{"voice": "robot"}, {"language": "fr"}, {"city": "x" * 61}])
+@pytest.mark.parametrize("body", [{"voice": "robot"}, {"language": "xx"}, {"city": "x" * 61}, {"currency": "XXX"}, {"topics": ["nope"]}])
 async def test_unknown_voices_languages_and_overlong_cities_are_refused(prefs_api, body):
     assert (await prefs_api.put("/prefs", json=body, headers=H)).status_code == 422
 
@@ -1149,7 +1165,6 @@ async def test_the_phones_gps_is_kept_only_while_gps_mode_is_on_and_only_to_a_ki
 
 
 async def test_a_voice_sample_is_made_in_the_chosen_voice_and_language(prefs_api, monkeypatch):
-    from apa.tts import voice
 
     got = []
 
@@ -1157,20 +1172,19 @@ async def test_a_voice_sample_is_made_in_the_chosen_voice_and_language(prefs_api
         got.append((text, kw))
         return b"RIFF" + b"x" * 3000
 
-    monkeypatch.setattr(voice, "synthesize", synth)
+    _patch_synth(monkeypatch, synth)
     monkeypatch.setenv("TTS_ENABLED", "true")
     get_settings.cache_clear()
     r = await prefs_api.get("/prefs/preview?voice=puck&lang=en", headers=H)
     assert r.status_code == 200 and r.headers["content-type"] == "audio/wav" and r.content.startswith(b"RIFF")
     assert got[0][1] == {"voice": "puck", "lang": "en"} and "voice" in got[0][0]
     assert (await prefs_api.get("/prefs/preview?voice=robot&lang=en", headers=H)).status_code == 422
-    assert (await prefs_api.get("/prefs/preview?voice=puck&lang=fr", headers=H)).status_code == 422
+    assert (await prefs_api.get("/prefs/preview?voice=puck&lang=xx", headers=H)).status_code == 422
     assert (await prefs_api.get("/prefs/preview?voice=puck")).status_code == 401
 
 
 async def test_a_briefing_is_spoken_in_the_voice_and_language_the_owner_chose(stack, api, redis, monkeypatch):
     from apa import prefs
-    from apa.tts import voice
 
     monkeypatch.setenv("GEMINI_API_KEY", "k")  # with no Gemini key every Gemini voice falls back to one voice and one cached clip
     get_settings.cache_clear()
@@ -1181,7 +1195,7 @@ async def test_a_briefing_is_spoken_in_the_voice_and_language_the_owner_chose(st
         got.append(kw)
         return b"ID3" + b"x" * 600
 
-    monkeypatch.setattr(voice, "synthesize", synth)
+    _patch_synth(monkeypatch, synth)
     await prefs.save(stack, prefs.Prefs(language="en", voice="puck"))
     h = {"x-api-key": "k"}
     b = (await api.get("/briefing/short", headers=h)).json()
@@ -1195,7 +1209,6 @@ async def test_a_briefing_is_spoken_in_the_voice_and_language_the_owner_chose(st
 
 async def test_the_morning_job_prepares_the_chosen_language_and_voice_and_sends_each_language_once(stack, redis, monkeypatch):
     from apa import prefs
-    from apa.tts import voice
 
     warmed = []
 
@@ -1203,7 +1216,7 @@ async def test_the_morning_job_prepares_the_chosen_language_and_voice_and_sends_
         warmed.append(kw)
         return b"ID3" + b"x" * 600
 
-    monkeypatch.setattr(voice, "synthesize", synth)
+    _patch_synth(monkeypatch, synth)
     n = FakeNotifier()
     await prefs.save(stack, prefs.Prefs(language="en", voice="puck"))
     await run_briefing_precompute(stack, Narrator(), redis, TZ, datetime.now(TZ), notifier=n)
@@ -1257,9 +1270,7 @@ class LongNarrator:
 
 
 async def test_an_over_long_briefing_drops_detail_first_and_keeps_the_cyber_counts(stack, redis, monkeypatch):
-    import apa.news.ingest as ing
 
-    monkeypatch.setattr(ing, "FEEDS", FEEDS)
     await ingest_news(stack, scripted(news_routes()), redis, feeds=FEEDS)
     async with stack() as s:
         for i in range(5):

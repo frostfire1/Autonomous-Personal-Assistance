@@ -152,10 +152,13 @@ async def run_extract(
             reply_id = tm.id
         await s.commit()
 
-    if result.status == "parsed" and source == "android_listener":
-        try:  # remember how this wording reads; never let that get in the way of the payment itself
+    learnable = source == "android_listener" and (
+        result.status == "parsed" or (result.status == "skipped" and result.reason == "llm_not_a_transaction")
+    )
+    if learnable:
+        try:  # remember how this wording reads (or that it is not a payment); never let it get in the way of the payment
             async with sm() as s:
-                if await templates.learn(s, package, text, result.parsed):
+                if await templates.learn(s, package, text, result.parsed if result.status == "parsed" else None):
                     await s.commit()
         except Exception as exc:
             log.warning("template_learning_failed", error=type(exc).__name__)

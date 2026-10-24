@@ -97,6 +97,36 @@ async def _item(key: str, label: str, ok: bool, detail: str, fix: str = "") -> d
     return {"key": key, "label": label, "ok": ok, "detail": detail, "fix": fix}
 
 
+@router.get("/templates")
+async def learned_formats() -> dict:
+    """How many notification formats were learned per app (the model read each once; later ones need no model)."""
+    from apa.ingestion import templates
+
+    async with SessionLocal() as s:
+        data = await templates._row(s)
+    return {pkg: {"formats": len(e), "skip": sum(1 for x in e if x.get("dir") == "skip"), "retired": sum(1 for x in e if x.get("bad"))}
+            for pkg, e in data.items()}
+
+
+@router.delete("/templates")
+async def clear_formats(package: str | None = None) -> dict:
+    """Forget what was learned for one app (?package=...), or for all. The model reads the next notification again; use it
+    when a learned format turned out wrong."""
+    from apa.ingestion import templates
+
+    async with SessionLocal() as s:
+        data = await templates._row(s, lock=True)
+        removed = len(data) if package is None else int(data.pop(package, None) is not None)
+        data = {} if package is None else data
+        from sqlalchemy import update
+
+        from apa.db.models.budget import PolicyRule
+
+        await s.execute(update(PolicyRule).where(PolicyRule.rule_key == templates.RULE_KEY).values(value_json=data))
+        await s.commit()
+    return {"cleared": removed}
+
+
 @router.get("/setup/status")
 async def status(request: Request) -> dict:
     """What is working and what is not yet, with the way to fix each. Core items first."""

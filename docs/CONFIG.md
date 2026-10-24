@@ -27,8 +27,12 @@ Two layers, on purpose:
   bank-notification amounts are read: a notification in another currency is not a ledger entry and goes to review.
 - **Any bank or wallet app, any country:** on the phone, pick the apps to listen to. The picker lists apps that look like banks and has a
   "Show all apps" button, so any app can be ticked. A ticked app is an approved wallet.
-- **Notification wording:** known Indonesian bank formats are read by rules. Anything else is matched by templates the system learns by itself
-  (after it has seen the same wording twice) or, for unfamiliar wording, read by the model, capped per hour. English wording
+- **Notification wording:** known Indonesian bank formats are read by rules. Anything else is read by the model **once** (money in or out, which
+  merchant, or "not a payment", such as money moved between your own accounts), and that wording is remembered for the app: the next
+  notification of the same format is handled from the remembered template with no model call. The amount is always taken from the text itself,
+  nothing is learned when the model contradicts clear words in the text, and learned formats follow the home currency. If a learned format
+  turns out wrong, clear it: `DELETE /templates?package=<app>` (or without `package` for all); `GET /templates` shows what was learned.
+  Unfamiliar wording the model reads is capped per hour. English wording
   (spent, paid, received, deposited, refund...) is understood by the built-in rules.
 - **Known limits:** the receipt-photo reading and the shorthand ("18k", "1,5jt") still assume whole numbers, so currencies with cents
   lose the decimals there; and the Indonesian bank labels (BCA, Mandiri...) are display names only. Changing the currency does not
