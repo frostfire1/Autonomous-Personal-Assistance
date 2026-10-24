@@ -27,6 +27,14 @@ a push replaces that device's day.
 
 Read it back: `GET /usage` (the dashboard API) shows per-day totals per device and the most used apps.
 
+### ActivityWatch's own settings (optional)
+
+`aw_push.py` talks to the ActivityWatch server on the same computer (`localhost:5600`), so you do not have to change anything and
+nothing is exposed on your network. Only if you want to run the script on another machine, point `--aw` at that server and set
+its bind address in its config file ([configuration docs](https://docs.activitywatch.net/en/latest/configuration.html)):
+`host` under `[server]` in `aw-server.toml` (Python server), or `address` in `config.toml` (Rust server), default localhost.
+That exposes the server to your network: keep it on a VPN (Tailscale), never the open internet.
+
 ## What the assistant learns from the diary (observations)
 
 Each night the diary also records what you said you ate, felt, did, liked and disliked as structured observations (a meal at a
