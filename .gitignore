@@ -24,8 +24,8 @@ secrets/
 sheets.json
 infra/garage/garage.toml
 voice-samples/
-data/
-backend/data/
+/data/
+/backend/data/
 
 # build output
 *.apk
