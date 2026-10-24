@@ -13,10 +13,12 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
+from apa import assistant_memory
 from apa.core.format import rupiah
 from apa.db.models.budget import BudgetRule
 from apa.db.models.health import SleepSession
 from apa.db.models.ledger import CashWallet, Transaction
+from apa.db.models.ops import InboundEvent, TelegramMessage
 
 MAX_RESULT_CHARS = 2500
 
@@ -54,6 +56,12 @@ class NewsQ(_A):
     limit: int = Field(default=5, ge=1, le=10)
 
 
+class RecallQ(_A):
+    query: str | None = Field(default=None, max_length=60)
+    days: int = Field(default=30, ge=1, le=365)
+    limit: int = Field(default=8, ge=1, le=15)
+
+
 class NoArgs(_A):
     pass
 
@@ -66,6 +74,7 @@ READ_TOOLS: dict[str, type[_A]] = {
     "sleep": DaysQ,
     "cve": LimitQ,
     "news": NewsQ,
+    "recall": RecallQ,
 }
 
 # what the model is told about the read tools (the write tools are described by chat.actions.TOOL_SPEC)
@@ -76,7 +85,8 @@ READ_TOOL_DOC = """Look-up tools (read only; call one, you get the result, then 
 - balances {}  wallet balances
 - sleep {"days": 1-30 (7)}
 - cve {"limit": 1-10 (5)}  the newest high or critical vulnerabilities with the technology and versions
-- news {"topic": "nasional"|"cyber"|a topic id (nasional), "limit": 1-10 (5)}"""
+- news {"topic": "nasional"|"cyber"|a topic id (nasional), "limit": 1-10 (5)}
+- recall {"query": string? (a word or phrase), "days": 1-365 (30), "limit": 1-15 (8)}  search your diary and the chat history of earlier days"""
 
 
 def _clip(text: str) -> str:
@@ -191,7 +201,37 @@ async def _news(sm, tz, now, a: NewsQ) -> str:
     return "\n".join(f"- {_clean(r.cluster.headline, 120)} ({', '.join(r.cluster.sources[:3])})" for r in ranked)
 
 
+async def _recall(sm, tz, now, a: RecallQ) -> str:
+    since = now - timedelta(days=a.days)
+    like = f"%{a.query}%" if a.query else None
+    owner_q = select(InboundEvent).where(InboundEvent.source == "telegram_shorthand", InboundEvent.received_at >= since)
+    bot_q = select(TelegramMessage).where(
+        TelegramMessage.direction == "out", TelegramMessage.kind == "reply", TelegramMessage.created_at >= since)
+    if like:
+        owner_q = owner_q.where(InboundEvent.payload["text"].astext.ilike(like))
+        bot_q = bot_q.where(TelegramMessage.body.ilike(like))
+    async with sm() as s:
+        owner = (await s.execute(owner_q.order_by(InboundEvent.received_at.desc()).limit(a.limit))).scalars().all()
+        bot = (await s.execute(bot_q.order_by(TelegramMessage.created_at.desc()).limit(a.limit))).scalars().all()
+    chat = sorted(
+        [(e.received_at, "OWNER", str(e.payload.get("text", ""))) for e in owner] + [(m.created_at, "APA", m.body or "") for m in bot],
+        key=lambda x: x[0], reverse=True,
+    )[: a.limit]
+    diary = (await assistant_memory.search_diary(sm, a.query, a.days))[-5:]
+    q = (a.query or "").lower()
+    known = [i for i in await assistant_memory.learned(sm) if not q or q in i["text"].lower()][-8:]
+    parts = []
+    if known:
+        parts.append("LEARNED:\n" + "\n".join(f"- [{i['kind']}] {i['text']} ({i.get('date', '?')})" for i in known))
+    if diary:
+        parts.append("DIARY:\n" + "\n".join(f"{e['date']}: {e['summary']}" for e in diary))
+    if chat:
+        parts.append("CHAT:\n" + "\n".join(f"{t.astimezone(tz):%d/%m %H:%M} {who}: {_clean(txt, 200)}" for t, who, txt in chat))
+    return "\n".join(parts) or "Nothing found in the diary or the chat history."
+
+
 _RUN = {
+    "recall": _recall,
     "transactions": _transactions, "spending": _spending, "budgets": _budgets, "balances": _balances,
     "sleep": _sleep, "cve": _cve, "news": _news,
 }

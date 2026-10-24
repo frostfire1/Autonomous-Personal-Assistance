@@ -375,6 +375,20 @@ async def steward_tick(ctx: dict) -> None:
     )
 
 
+async def memory_digest(ctx: dict) -> str:
+    """Each night the assistant writes the day's diary entry from the day's chat (nothing when there was little to say)."""
+    from apa import assistant_memory
+
+    tz = ZoneInfo(get_settings().timezone)
+    sm = ctx.get("sessionmaker", SessionLocal)
+    try:
+        written = await assistant_memory.summarize_day(sm, ctx["llm"], datetime.now(tz).date(), tz)
+    except Exception as exc:  # a model outage skips one night; the dashboard button can fill it in
+        log.warning("memory_digest_failed", error=type(exc).__name__)
+        return "failed"
+    return "written" if written else "skipped"
+
+
 async def weekly_digest(ctx: dict) -> None:
     """A-12: the week in numbers, pushed Sunday evening without being asked."""
     tz = ZoneInfo(get_settings().timezone)
@@ -458,11 +472,12 @@ class WorkerSettings:
     max_tries = COMMIT_MAX_TRIES
     functions = [
         process_inbound_event, commit_event, extract_event, master_event, chat_event, reconcile_event,
-        read_receipt, release_quarantined, briefing_telegram, phone_watch,
+        read_receipt, release_quarantined, briefing_telegram, phone_watch, memory_digest,
     ]
     cron_jobs = [
         cron(sheets_sync, second=0, run_at_startup=False),  # every 60 s
         cron(phone_watch, minute={5, 35}, run_at_startup=False),
+        cron(memory_digest, hour=23, minute=55, run_at_startup=False),
         cron(steward_tick, minute={3, 13, 23, 33, 43, 53}, run_at_startup=False),  # every 10 min
         cron(cyberramen_poll, minute={0, 10, 20, 30, 40, 50}),
         cron(news_ingest, minute={0, 15, 30, 45}),

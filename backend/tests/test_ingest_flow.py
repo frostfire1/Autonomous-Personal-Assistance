@@ -420,7 +420,7 @@ def test_the_read_tools_validate_their_arguments_and_say_what_is_wrong():
     from apa.chat.tools import READ_TOOLS, run_read
 
     now, tz = datetime.now(UTC), ZoneInfo("Asia/Jakarta")
-    assert {"transactions", "spending", "budgets", "balances", "sleep", "cve", "news"} == set(READ_TOOLS)
+    assert {"transactions", "spending", "budgets", "balances", "sleep", "cve", "news", "recall"} == set(READ_TOOLS)
     for name, args in (("transactions", {"days": 9999}), ("spending", {"period": "decade"}), ("sleep", {"days": 0}),
                        ("news", {"limit": 99}), ("transactions", {"drop": "table"})):
         assert asyncio.run(run_read(None, tz, now, name, args)).startswith("Bad arguments")
@@ -458,3 +458,20 @@ def test_what_is_remembered_is_scrubbed_of_long_numbers_and_capped():
     assert clean("my card 4111 1111 1111 1111 and rent is on the 5th") == "my card [number] and rent is on the 5th"
     assert clean("call 0812-3456-7890 please") == "call [number] please"
     assert len(clean("x " * 500)) <= MAX_CHARS
+
+
+def test_the_nightly_digest_reply_is_read_into_a_summary_and_lasting_items():
+    from apa.assistant_memory import MAX_PER_DAY, parse_digest
+
+    summary, items = parse_digest(
+        '{"summary": "Owner cerita kerjaan cyber security dan rencana beli vitamin.", "learned": ['
+        '{"kind": "routine", "text": "Bekerja di bidang cyber security"}, {"kind": "nonsense", "text": "Suka kopi tanpa gula"},'
+        '{"kind": "person", "text": "ab"}, {"text": 5}, "junk"]}'
+    )
+    assert summary.startswith("Owner cerita") and [i["kind"] for i in items] == ["routine", "other"]  # unknown kind -> other; too short or malformed dropped
+    assert parse_digest("```json\n{\"summary\": \"Hari biasa saja kok.\", \"learned\": []}\n```") == ("Hari biasa saja kok.", [])
+    assert parse_digest("Prosa biasa tentang hari ini.") == ("Prosa biasa tentang hari ini.", [])  # plain prose: a summary, nothing learned
+    assert parse_digest("[1, 2]") == ("", []) and parse_digest("") == ("", [])
+    many = '{"summary": "x y z a b c d e f", "learned": [' + ",".join(f'{{"kind": "goal", "text": "tujuan nomor {i}"}}' for i in range(20)) + "]}"
+    assert len(parse_digest(many)[1]) == MAX_PER_DAY
+    assert parse_digest('{"summary": "kartu 4111 1111 1111 1111 ok ya", "learned": []}')[0] == "kartu [number] ok ya"  # numbers scrubbed

@@ -132,7 +132,8 @@ async def get_memory() -> dict:
     """What the assistant has been asked to remember about the owner."""
     from apa import assistant_memory
 
-    return {"facts": await assistant_memory.load(SessionLocal)}
+    return {"facts": await assistant_memory.load(SessionLocal), "diary": await assistant_memory.episodes(SessionLocal),
+            "learned": await assistant_memory.learned(SessionLocal)}
 
 
 @router.delete("/memory/{index}")
@@ -140,6 +141,41 @@ async def forget_memory(index: int) -> dict:
     from apa import assistant_memory
 
     return {"result": await assistant_memory.forget(SessionLocal, index), "facts": await assistant_memory.load(SessionLocal)}
+
+
+@router.delete("/memory/learned/{index}")
+async def delete_learned_item(index: int) -> dict:
+    from apa import assistant_memory
+
+    return {"deleted": await assistant_memory.delete_learned(SessionLocal, index)}
+
+
+@router.get("/memory/export")
+async def export_memory() -> dict:
+    """Everything the assistant keeps about the owner (notes, what it learned, the diary), as JSON."""
+    from apa import assistant_memory
+
+    return await assistant_memory.export_all(SessionLocal)
+
+
+@router.delete("/memory/diary/{day}")
+async def delete_diary_day(day: str) -> dict:
+    from apa import assistant_memory
+
+    return {"deleted": await assistant_memory.delete_episode(SessionLocal, day)}
+
+
+@router.post("/memory/diary/today")
+async def write_diary_today(request: Request) -> dict:
+    """Write today's diary entry now (the job does it every night at 23:55)."""
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+
+    from apa import assistant_memory
+
+    tz = ZoneInfo(get_settings().timezone)
+    written = await assistant_memory.summarize_day(SessionLocal, request.app.state.llm, datetime.now(tz).date(), tz)
+    return {"written": written}
 
 
 @router.get("/setup/status")

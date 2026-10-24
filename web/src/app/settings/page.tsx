@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { api, audioWithInfo, del, put, useApi } from "@/lib/api";
+import { api, audioWithInfo, del, post, put, useApi } from "@/lib/api";
 
 type Prefs = {
   language: string;
@@ -33,7 +33,7 @@ export default function SettingsPage() {
   const [msg, setMsg] = useState("");
   const [playing, setPlaying] = useState(false);
   const player = useRef<HTMLAudioElement | null>(null);
-  const { data: memory, reload: reloadMemory } = useApi<{ facts: string[] }>("/memory");
+  const { data: memory, reload: reloadMemory } = useApi<{ facts: string[]; diary: { date: string; summary: string }[]; learned: { kind: string; text: string; date?: string }[] }>("/memory");
   const { data: formats, reload: reloadFormats } = useApi<Record<string, { formats: number; skip: number; retired: number }>>("/templates");
   const [note, setNote] = useState("");
 
@@ -171,16 +171,49 @@ export default function SettingsPage() {
         </div>
       )}
 
-      <h2>What the assistant remembers</h2>
+      <h2>What the assistant knows about you</h2>
       <div className="card">
-        {!memory ? <p className="muted">Loading...</p> : memory.facts.length === 0 ? (
-          <p className="muted">Nothing yet. Tell the assistant in Telegram, for example &quot;remember that I am vegetarian&quot;. It never stores passwords or card numbers.</p>
-        ) : (
-          <ol>
-            {memory.facts.map((f, i) => (
-              <li key={i}>{f} <button className="link" onClick={async () => { await del(`/memory/${i + 1}`); reloadMemory(); }}>Forget</button></li>
-            ))}
-          </ol>
+        <p className="muted">
+          Your personal dataset, built from your chats: notes you asked it to keep, things it noticed on its own (only what you said about your
+          own life), and a daily diary. It uses them to know the context. Delete anything that is wrong; /private chats are never included.
+        </p>
+        {!memory ? <p className="muted">Loading...</p> : (
+          <>
+            <h3>Notes you asked it to keep</h3>
+            {memory.facts.length === 0 ? <p className="muted">None yet. Tell it in Telegram: &quot;remember that I am vegetarian&quot;.</p> : (
+              <ol>
+                {memory.facts.map((f, i) => (
+                  <li key={i}>{f} <button className="link" onClick={async () => { await del(`/memory/${i + 1}`); reloadMemory(); }}>Forget</button></li>
+                ))}
+              </ol>
+            )}
+            <h3>What it learned by itself</h3>
+            {memory.learned.length === 0 ? <p className="muted">Nothing yet. After a day of chatting it picks out lasting things (a person, a preference, a goal, a routine).</p> : (
+              <ol>
+                {memory.learned.map((l, i) => (
+                  <li key={i}><b>{l.kind}</b>: {l.text} <span className="muted">{l.date}</span>{" "}
+                    <button className="link" onClick={async () => { await del(`/memory/learned/${i + 1}`); reloadMemory(); }}>Delete</button></li>
+                ))}
+              </ol>
+            )}
+            <h3>Diary</h3>
+            {memory.diary.length === 0 ? <p className="muted">No entries yet. One is written each night at 23:55 when you chatted that day.</p> : (
+              <ul>
+                {[...memory.diary].reverse().map((e) => (
+                  <li key={e.date}><b>{e.date}</b>: {e.summary}{" "}
+                    <button className="link" onClick={async () => { await del(`/memory/diary/${e.date}`); reloadMemory(); }}>Delete</button></li>
+                ))}
+              </ul>
+            )}
+            <div className="row">
+              <button onClick={async () => { setNote("Writing today's diary..."); const r = await post<{ written: string | null }>("/memory/diary/today", {}); setNote(r.written ? "Today's entry written." : "Too little chat today to write an entry."); reloadMemory(); }}>Write today&apos;s diary now</button>
+              <button onClick={async () => {
+                const data = await api<unknown>("/memory/export");
+                const url = URL.createObjectURL(new Blob([JSON.stringify(data, null, 2)], { type: "application/json" }));
+                const a = document.createElement("a"); a.href = url; a.download = "assistant-memory.json"; a.click(); URL.revokeObjectURL(url);
+              }}>Export everything (JSON)</button>
+            </div>
+          </>
         )}
       </div>
 

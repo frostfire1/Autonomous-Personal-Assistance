@@ -82,10 +82,16 @@ async def _context(sm, tz: ZoneInfo, now: datetime, history_block: str, reply_to
         if tm is not None:
             replied = f"The owner is replying to this earlier message of yours: «{(tm.body or '')[:300]}»" + (
                 f" (about transaction #{tm.transaction_id})" if tm.transaction_id else "") + "\n"
+    diary = (await assistant_memory.episodes(sm))[-7:]
+    diary_block = ("YOUR DIARY (summaries of earlier days; use the recall look-up for details):\n" + "\n".join(
+        f"{e['date']}: {e['summary']}" for e in diary)[-1500:] + "\n") if diary else ""
+    items = (await assistant_memory.learned(sm))[-25:]
+    learned_block = ("WHAT YOU HAVE LEARNED about the owner from past chats (may be out of date):\n" + "\n".join(
+        f"- [{i['kind']}] {i['text']}" for i in items)[-1500:] + "\n") if items else ""
     notes = await assistant_memory.load(sm)
     remembered = ("WHAT YOU REMEMBER about the owner (their own notes):\n" + "\n".join(f"{i}. {n}" for i, n in enumerate(notes, 1)) + "\n") if notes else ""
     return (
-        f"Now: {now:%A %d/%m/%Y %H:%M} ({tz})\n{remembered}{replied}Recent chat:\n{history_block}\n\n<DATA>\n{facts[:CONTEXT_CHARS]}\n</DATA>"
+        f"Now: {now:%A %d/%m/%Y %H:%M} ({tz})\n{remembered}{learned_block}{diary_block}{replied}Recent chat:\n{history_block}\n\n<DATA>\n{facts[:CONTEXT_CHARS]}\n</DATA>"
     )
 
 

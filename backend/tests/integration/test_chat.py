@@ -404,3 +404,56 @@ async def test_the_assistants_memory_is_kept_deduplicated_capped_and_can_be_forg
     assert len(facts) == mem.MAX_FACTS and facts[-1] == f"fact number {mem.MAX_FACTS + 4}" and "I am vegetarian" not in facts
     assert (await mem.forget(stack, 1)).startswith("Forgot") and len(await mem.load(stack)) == mem.MAX_FACTS - 1
     assert await mem.forget(stack, 99) == "No such item." and await mem.forget(stack, 0) == "No such item."
+
+
+async def test_the_diary_is_written_from_the_days_chat_and_the_assistant_can_recall_it(stack):
+    from datetime import datetime
+
+    from apa import assistant_memory as mem
+    from apa.chat.tools import run_read
+
+    now = datetime.now(TZ)
+    for text in ("aku cyber security dan lagi chaos", "mau beli vitamin biar tidak tumbang"):
+        await raw_event(stack, text, source="telegram_shorthand", status="skipped")
+    async with stack() as s:
+        s.add(TelegramMessage(direction="out", chat_id=1, kind="reply", body="Semangat! Mau cek pengeluaran vitamin?"))
+        await s.commit()
+
+    class Llm:
+        seen = ""
+
+        async def complete(self, route, system, user, **kw):
+            Llm.seen = user
+            body = {"summary": "Owner cerita kerjaan cyber security yang chaos dan rencana beli vitamin.",
+                    "learned": [{"kind": "routine", "text": "Bekerja di cyber security"}, {"kind": "plan", "text": "Berencana membeli vitamin"}]}
+            return LLMResult(json.dumps(body), "fake", 50, 20, 0)
+
+    # one line of chat is too little for an entry
+    assert await mem.summarize_day(stack, Llm(), now.date(), TZ) is not None  # two owner lines: written
+    assert "OWNER: aku cyber security" in Llm.seen and "APA: Semangat!" in Llm.seen  # the model saw both sides, in order
+    assert [e["date"] for e in await mem.episodes(stack)] == [now.date().isoformat()]
+    assert [(i["kind"], i["text"]) for i in await mem.learned(stack)] == [("routine", "Bekerja di cyber security"), ("plan", "Berencana membeli vitamin")]
+    assert await mem.add_learned(stack, now.date(), [{"kind": "plan", "text": "berencana membeli vitamin"}]) == 0  # a repeat is not added twice
+
+    found = await run_read(stack, TZ, now, "recall", {"query": "vitamin"})
+    assert "DIARY:" in found and "LEARNED:" in found and "CHAT:" in found and "mau beli vitamin" in found
+    assert (await run_read(stack, TZ, now, "recall", {"query": "zzz-not-there"})).startswith("Nothing found")
+
+    assert await mem.delete_learned(stack, 1) and len(await mem.learned(stack)) == 1 and not await mem.delete_learned(stack, 9)
+    assert await mem.delete_episode(stack, now.date().isoformat()) and await mem.episodes(stack) == []
+    export = await mem.export_all(stack)
+    assert set(export) == {"notes", "learned", "diary"}
+
+
+async def test_a_day_with_almost_no_chat_writes_no_diary_entry(stack):
+    from datetime import datetime
+
+    from apa import assistant_memory as mem
+
+    await raw_event(stack, "halo", source="telegram_shorthand", status="skipped")
+
+    class Llm:
+        async def complete(self, *a, **k):
+            raise AssertionError("the model must not be asked about a day with one line of chat")
+
+    assert await mem.summarize_day(stack, Llm(), datetime.now(TZ).date(), TZ) is None and await mem.episodes(stack) == []
