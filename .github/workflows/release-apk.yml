@@ -1,7 +1,7 @@
 name: release-apk
 
 # Builds the Android app and publishes it as a GitHub Release:
-#   - every push to main updates the "latest" pre-release (apa-latest.apk), automatically;
+#   - every push to main updates the "latest" release (apa-latest.apk), automatically, as a normal release;
 #   - pushing a tag such as v0.1.0 makes a permanent release (apa-v0.1.0.apk) with generated notes.
 # It is a debug build (signed with the debug key): fine for your own phone, not for the Play Store.
 on:
@@ -44,5 +44,5 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           gh release delete latest --yes --cleanup-tag || true
-          gh release create latest "$APK" --prerelease --target "$GITHUB_SHA" --title "Latest build (main)" \
+          gh release create latest "$APK" --latest --target "$GITHUB_SHA" --title "Latest build (main)" \
             --notes "Automatic debug build of the newest commit on main (${GITHUB_SHA::7}). Install with adb or open the file on the phone. See docs/ANDROID.md."
