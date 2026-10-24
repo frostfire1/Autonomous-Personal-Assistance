@@ -213,12 +213,14 @@ def watch_trait(items: list[tuple[str, str, str]]) -> Trait | None:
     watched = [(c, t) for k, c, t in items if k == "watched"]
     liked = [(c, t) for k, c, t in items if k in ("liked", "saved")]
     subs = [c for k, c, _ in items if k == "subscribed"]
-    if len(watched) < 10 and len(liked) < 5 and len(subs) < 5:
+    listened = [c for k, c, _ in items if k == "listened"]
+    if len(watched) < 10 and len(liked) < 5 and len(subs) < 5 and len(listened) < 5:
         return None
     channels = Counter(c for c, _ in watched if c).most_common(5)
     words = Counter(w for _, t in watched + liked for w in _WORD.findall(t.lower()) if w not in STOP)
     topics = [w for w, n in words.most_common(8) if n >= 3][:6]
     searches = Counter(t.lower() for k, _, t in items if k == "searched").most_common(4)
+    heard = Counter(c for k, c, _ in items if k == "listened" and c).most_common(5)
     text = f"On YouTube ({len(watched)} videos): mostly " + ", ".join(f"{c} ({n})" for c, n in channels) + "." if len(watched) >= 10 and channels else ""
     if subs:
         text += f" Follows {len(subs)} channels, among them " + ", ".join(subs[:6]) + "."
@@ -227,9 +229,11 @@ def watch_trait(items: list[tuple[str, str, str]]) -> Trait | None:
         text += " Liked videos come mostly from " + ", ".join(f"{c} ({n})" for c, n in fav) + "."
     if topics and len(watched) >= 10:
         text += " Topics that keep coming up: " + ", ".join(topics) + "."
+    if len(heard) and sum(n for _, n in heard) >= 5:
+        text += " Listens to (YouTube Music): " + ", ".join(f"{c} ({n})" for c, n in heard) + "."
     if searches:
         text += " Searched for: " + ", ".join(t for t, _ in searches) + "."
-    return Trait("youtube", text.strip(), len(watched) + len(liked) + len(subs), {"channels": channels, "topics": topics, "searches": searches, "subscriptions": len(subs)})
+    return Trait("youtube", text.strip(), len(watched) + len(liked) + len(subs) + len(listened), {"channels": channels, "topics": topics, "searches": searches, "subscriptions": len(subs)})
 
 
 def habits_trait(obs: list[tuple[str, str]]) -> Trait | None:
@@ -373,7 +377,7 @@ async def refresh(sm: async_sessionmaker, tz: ZoneInfo, now: datetime | None = N
             stmt = insert(ProfileTrait).values(key=t.key, summary=t.summary, data=t.data, evidence=t.evidence, computed_at=func.now())
             await s.execute(stmt.on_conflict_do_update(
                 index_elements=["key"], set_={"summary": t.summary, "data": t.data, "evidence": t.evidence, "computed_at": func.now()}))
-        await s.execute(delete(ProfileTrait).where(ProfileTrait.key.not_in([t.key for t in traits] or [""])))
+        await s.execute(delete(ProfileTrait).where(ProfileTrait.key.not_in([t.key for t in traits] or [""]), ~ProfileTrait.key.like("ai.%")))
         await s.commit()
     return traits
 

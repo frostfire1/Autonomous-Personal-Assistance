@@ -20,7 +20,7 @@ get the strictest handling.
 
 The assistant (a model run by the provider you chose) sees: your recent chat messages, your latest transactions and budgets, the
 notes you asked it to keep, what it learned from your chats, diary summaries of earlier days, the profile computed from your data,
-and **only the journal entries you marked as shared**. That text is sent to the provider to produce a reply. If that is not
+**only the journal entries you marked as shared** (those are also read by the nightly diary summary, to write the day's summary and observations; private entries never are), and, if you use the YouTube features, **channel names and video titles** of what you watch, like and follow (the nightly `ai.content` summary). That text is sent to the provider to produce a reply. If that is not
 acceptable for something, keep it in the private journal (never sent) or do not type it in the chat.
 
 ## What is NOT protected, honestly

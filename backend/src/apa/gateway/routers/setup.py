@@ -319,6 +319,18 @@ async def usage_summary(days: int = 14) -> dict:
                                key=lambda x: -x["seconds"])[:15]}
 
 
+@router.post("/profile/content")
+async def profile_content(request: Request) -> dict:
+    """Have the AI group what you watch, listen to and like (YouTube) into topics now; it also runs every night."""
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+
+    from apa import content
+
+    today = datetime.now(ZoneInfo(get_settings().timezone)).date()
+    return {"result": await content.digest(SessionLocal, request.app.state.llm, today, force=True)}
+
+
 @router.get("/profile")
 async def get_profile() -> dict:
     """The patterns computed from the owner's data (sleep, activity, food, spending, steps, stress, interests)."""

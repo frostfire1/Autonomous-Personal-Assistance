@@ -692,3 +692,54 @@ async def test_a_connected_youtube_account_is_read_stored_encrypted_and_forgotte
     assert sorted(w["k"] for w in await mem.watched(stack, 5, date.today())) == ["liked", "subscribed"]
     await youtube_api.disconnect(stack)
     assert not await youtube_api.connected(stack) and await mem.watched(stack, 5, date.today()) == []
+
+
+async def test_the_ai_content_trait_is_written_only_when_the_data_changed_and_survives_a_profile_refresh(stack):
+    from datetime import date, datetime
+
+    from apa import assistant_memory as mem
+    from apa import content, profile
+
+    today = date.today()
+    await mem.add_watch(stack, {today: [{"k": "watched", "c": "Dapur Ani", "t": f"Resep {i}"} for i in range(20)]})
+    calls = []
+
+    class Llm:
+        async def complete(self, route, system, user, **kw):
+            calls.append(user)
+            return LLMResult(json.dumps({"summary": "Watches cooking videos, mostly one channel.", "topics": [{"name": "cooking", "share": 90}],
+                                         "music": [], "likes": ["recipes"]}), "fake", 10, 10, 0)
+
+    assert await content.digest(stack, Llm(), today) == "written" and await content.digest(stack, Llm(), today) == "unchanged" and len(calls) == 1
+    assert "[watched x20] Dapur Ani" in calls[0]
+    await profile.refresh(stack, TZ, datetime.now(TZ))  # the nightly recompute must not delete the AI's trait
+    assert "ai.content" in [t["key"] for t in await profile.traits(stack)]
+    assert await content.digest(stack, Llm(), today, force=True) == "written" and len(calls) == 2
+    await mem.add_watch(stack, {today: []})  # too little data afterwards is simply skipped
+    async with stack() as s:
+        from sqlalchemy import text
+
+        await s.execute(text("delete from memory_items where kind = 'watch'"))
+        await s.commit()
+    assert await content.digest(stack, Llm(), today) == "skipped"
+
+
+async def test_the_nightly_diary_reads_shared_journal_entries_and_never_private_ones(stack):
+    from datetime import date, datetime
+
+    from apa import assistant_memory as mem
+
+    now = datetime.now(TZ)
+    await mem.journal_add(stack, date.today(), "hari ini makan sate dan senang sekali", shared=True)
+    await mem.journal_add(stack, date.today(), "rahasia pribadi yang tidak boleh dibaca AI", shared=False)
+    seen = []
+
+    class Llm:
+        async def complete(self, route, system, user, **kw):
+            seen.append(user)
+            return LLMResult(json.dumps({"summary": "Owner makan sate dan senang hari ini.", "learned": [],
+                                         "observations": [{"type": "meal", "text": "sate"}]}), "fake", 10, 10, 0)
+
+    assert await mem.summarize_day(stack, Llm(), now.date(), TZ) is not None  # a shared diary entry alone is enough for a day
+    assert "OWNER (own diary): hari ini makan sate" in seen[0] and "rahasia" not in seen[0]
+    assert [o["text"] for o in await mem.observations(stack, 3, now.date())] == ["sate"]

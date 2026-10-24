@@ -189,7 +189,10 @@ async def day_transcript(sm: async_sessionmaker, day: date, tz: ZoneInfo) -> tup
         key=lambda x: x[0],
     )
     text = "\n".join(f"{who}: {clean(t, 300)}" for _, who, t in lines if t.strip())
-    return text[-TRANSCRIPT_CHARS:], len(owner)
+    diary = [clean(_open(r), 600) for r in await _items(sm, MemoryItem.kind == "journal", MemoryItem.shared.is_(True), MemoryItem.day == day)]
+    if diary:  # only entries the owner marked "let the assistant read this"; private ones are never read
+        text += ("\n" if text else "") + "\n".join(f"OWNER (own diary): {d}" for d in diary)
+    return text[-TRANSCRIPT_CHARS:], len(owner) + MIN_OWNER_MESSAGES * len(diary)  # a deliberate diary entry is enough on its own
 
 
 DIARY_SYSTEM = (

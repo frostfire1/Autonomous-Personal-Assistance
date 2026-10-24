@@ -39,7 +39,9 @@ def parse(items: list[Any], tz: ZoneInfo, now: datetime, days: int = WINDOW_DAYS
         channel = " ".join(str(subs[0].get("name", "")).split())[:60] if isinstance(subs, list) and subs and isinstance(subs[0], dict) else ""
         if len(title) < 2 or (title.startswith("http") and not channel):
             continue  # a removed video: nothing to learn from it
-        out.setdefault(at.date(), []).append({"k": "searched" if prefix in _SEARCH else "watched", "c": channel, "t": title})
+        music = str(it.get("header", "")).lower() == "youtube music" or "youtube music" in [str(p).lower() for p in it.get("products") or []]
+        kind = "searched" if prefix in _SEARCH else "listened" if music else "watched"
+        out.setdefault(at.date(), []).append({"k": kind, "c": channel.removesuffix(" - Topic"), "t": title})
         n += 1
         if n >= MAX_ITEMS:
             break

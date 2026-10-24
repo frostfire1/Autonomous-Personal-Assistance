@@ -412,6 +412,9 @@ async def memory_digest(ctx: dict) -> str:
         written = None
     try:  # days the diary missed are written first, then chat older than the retention window is erased
         await _sync_youtube(sm, now)
+        from apa import content
+
+        await content.digest(sm, ctx["llm"], now.date())
         await retention.catch_up(sm, ctx["llm"], tz, now.date())
         await retention.prune(sm, tz, now, get_settings().chat_keep_days)
     except Exception as exc:

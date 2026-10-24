@@ -737,3 +737,25 @@ def test_the_activity_feed_dates_likes_and_replaces_the_undated_copy():
     items = youtube_api.shape(liked, [], acts)
     assert items == [{"k": "liked", "c": "Kelas Kode", "t": "Belajar python", "d": "2026-03-02"},
                      {"k": "saved", "c": "", "t": "Resep", "d": "2026-03-03"}, {"k": "liked", "c": "Musik", "t": "Lagu santai"}]
+
+
+def test_music_from_youtube_music_is_listened_and_the_ai_reply_is_validated():
+    from datetime import UTC, datetime
+    from zoneinfo import ZoneInfo
+
+    from apa import content, profile, youtube
+
+    now = datetime(2026, 3, 10, 12, 0, tzinfo=UTC)
+    items = [{"header": "YouTube Music", "title": f"Watched Lagu {i}", "subtitles": [{"name": "Tulus - Topic"}], "time": "2026-03-09T10:00:00Z"} for i in range(5)]
+    items += [{"header": "YouTube", "title": "Watched Resep", "subtitles": [{"name": "Dapur Ani"}], "time": "2026-03-09T10:00:00Z"}]
+    flat = [i for v in youtube.parse(items, ZoneInfo("Asia/Jakarta"), now).values() for i in v]
+    assert [i["k"] for i in flat].count("listened") == 5 and flat[0]["c"] == "Tulus"
+    t = profile.watch_trait([(i["k"], i["c"], i["t"]) for i in flat])
+    assert t and "Listens to (YouTube Music): Tulus (5)" in t.summary
+
+    lines = content.build_input([("listened", "Tulus", "Lagu 1")] * 3 + [("watched", "Dapur Ani", "Resep")])
+    assert lines.splitlines()[0] == "[listened x3] Tulus | Lagu 1"
+    good = '{"summary": "Watches cooking and listens to Indonesian pop.", "topics": [{"name": "cooking", "share": 140}, {"x": 1}], "music": ["Tulus", 5], "likes": ["recipes"]}'
+    out = content.parse_reply(good)
+    assert out and out["topics"] == [{"name": "cooking", "share": 100}] and out["music"] == ["Tulus"] and out["likes"] == ["recipes"]
+    assert content.parse_reply("nonsense") is None and content.parse_reply('{"summary": "x"}') is None
