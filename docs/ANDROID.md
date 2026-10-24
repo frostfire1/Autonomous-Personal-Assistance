@@ -21,7 +21,11 @@ echo "sdk.dir=/path/to/Android/Sdk" > local.properties     # Windows: sdk.dir=C\
 gradle :app:assembleDebug :app:testDebugUnitTest
 ```
 
-The APK is `android/app/build/outputs/apk/debug/app-debug.apk`. It is a debug build (signed with the debug key), fine for
+The APK is `android/app/build/outputs/apk/debug/app-debug.apk`.
+
+**Download instead of building:** GitHub Actions publishes it automatically. The newest commit on `main` is always at *Releases, "Latest build (main)"*
+(`apa-latest.apk`); pushing a tag such as `v0.1.0` makes a permanent release (`apa-v0.1.0.apk`). On a private repository only people with
+access can download it. It is a debug build (signed with the debug key), fine for
 your own phone. GitHub Actions can build it for you: see `.github/workflows/ci.yml` (the APK is attached to each run as an
 artifact).
 
