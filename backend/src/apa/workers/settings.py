@@ -375,6 +375,21 @@ async def steward_tick(ctx: dict) -> None:
     )
 
 
+async def _sync_youtube(sm: Any, now: datetime) -> None:
+    """Refresh the liked videos and follows when a YouTube account is connected; a failure is only logged."""
+    import httpx
+
+    from apa import youtube_api
+
+    if not (youtube_api.configured() and await youtube_api.connected(sm)):
+        return
+    try:
+        async with httpx.AsyncClient(timeout=30) as http:
+            await youtube_api.sync(sm, http, now.date())
+    except Exception as exc:
+        log.warning("youtube_sync_failed", error=type(exc).__name__)
+
+
 async def memory_digest(ctx: dict) -> str:
     """Each night the assistant writes the day's diary entry from the day's chat (nothing when there was little to say)."""
     from apa import assistant_memory
@@ -396,6 +411,7 @@ async def memory_digest(ctx: dict) -> str:
         log.warning("memory_digest_failed", error=type(exc).__name__)
         written = None
     try:  # days the diary missed are written first, then chat older than the retention window is erased
+        await _sync_youtube(sm, now)
         await retention.catch_up(sm, ctx["llm"], tz, now.date())
         await retention.prune(sm, tz, now, get_settings().chat_keep_days)
     except Exception as exc:

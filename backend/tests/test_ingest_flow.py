@@ -680,3 +680,48 @@ def test_the_usage_trait_reports_this_weeks_trend():
     rows = [(date(2026, 1, 1) + timedelta(days=i), "p", "android", "Chrome", 3600 if i < 7 else 7200, None) for i in range(14)]
     t = profile.usage_trait(rows, ZoneInfo("Asia/Jakarta"))
     assert t and "The last 7 days average 2.0 h, up 100% on the week before" in t.summary and len(t.data["daily"]) == 14
+
+
+def test_youtube_account_items_are_shaped_and_reach_the_trait():
+    from apa import profile, youtube_api
+
+    liked = [{"snippet": {"title": f"Video {i} tentang python", "channelTitle": "Kelas Kode"}} for i in range(5)] + [{"snippet": {}}]
+    subs = [{"snippet": {"title": n}} for n in ("Kelas Kode", "Dapur Ani", "Gadget Lab", "Musik Santai", "Berita Pagi")]
+    items = youtube_api.shape(liked, subs)
+    assert len(items) == 10 and items[0] == {"k": "liked", "c": "Kelas Kode", "t": "Video 0 tentang python"} and items[-1]["k"] == "subscribed"
+    t = profile.watch_trait([(i["k"], i["c"], i["t"]) for i in items])
+    assert t and "Follows 5 channels" in t.summary and "Liked videos come mostly from Kelas Kode (5)" in t.summary and t.data["subscriptions"] == 5
+
+
+def test_connecting_youtube_needs_credentials_and_reports_pending_until_the_code_is_entered(monkeypatch):
+    import asyncio
+
+    import httpx
+
+    from apa import youtube_api
+    from apa.core.settings import get_settings
+
+    def handler(req):
+        if "device/code" in str(req.url):
+            return httpx.Response(200, json={"user_code": "ABCD-EFGH", "verification_url": "https://www.google.com/device", "device_code": "dc", "interval": 5, "expires_in": 1800})
+        return httpx.Response(428, json={"error": "authorization_pending"})
+
+    async def run():
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+            try:
+                await youtube_api.start(http)
+                raise AssertionError("must refuse without credentials")
+            except youtube_api.YouTubeError as e:
+                assert "YOUTUBE_CLIENT_ID" in str(e)
+            monkeypatch.setenv("YOUTUBE_CLIENT_ID", "cid")
+            monkeypatch.setenv("YOUTUBE_CLIENT_SECRET", "sec")
+            get_settings.cache_clear()
+            d = await youtube_api.start(http)
+            assert d["user_code"] == "ABCD-EFGH" and d["device_code"] == "dc"
+            assert await youtube_api.poll(None, http, "dc") == "pending"
+
+    monkeypatch.delenv("YOUTUBE_CLIENT_ID", raising=False)
+    monkeypatch.delenv("YOUTUBE_CLIENT_SECRET", raising=False)
+    get_settings.cache_clear()
+    asyncio.run(run())
+    get_settings.cache_clear()

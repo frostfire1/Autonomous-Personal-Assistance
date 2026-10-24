@@ -47,6 +47,9 @@ class Settings(BaseSettings):
     price_feed_url: str = ""  # optional JSON feed of staple prices: [{"code","region","date","price"}]
     huawei_client_id: str = ""
     huawei_client_secret: str = ""
+    # YouTube Data API (liked videos, follows): a Google Cloud OAuth client for TVs and Limited Input devices
+    youtube_client_id: str = ""
+    youtube_client_secret: str = ""
 
     # The briefing (voice clips + Telegram text) is prepared this many minutes before the wake-up time.
     briefing_wake_time: str = "06:30"

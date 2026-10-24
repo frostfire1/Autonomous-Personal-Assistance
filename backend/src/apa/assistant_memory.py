@@ -301,6 +301,16 @@ async def add_watch(sm: async_sessionmaker, by_day: dict[date, list[dict]]) -> i
     return len(rows)
 
 
+async def replace_api_watch(sm: async_sessionmaker, day: date, items: list[dict]) -> int:
+    """Replace what the YouTube account sync stored earlier (liked videos, subscriptions). -> items stored."""
+    rows = [_row(WATCH, json.dumps(i, ensure_ascii=False), day=day, source="api", shared=False) for i in items]
+    async with sm() as s:
+        await s.execute(delete(MemoryItem).where(MemoryItem.kind == WATCH, MemoryItem.source == "api"))
+        s.add_all(rows)
+        await s.commit()
+    return len(rows)
+
+
 async def watched(sm: async_sessionmaker, days: int = 90, today: date | None = None) -> list[dict]:
     """[{"date", "k", "c", "t"}] for the last `days` days, oldest first."""
     since = (today or date.today()) - timedelta(days=days)

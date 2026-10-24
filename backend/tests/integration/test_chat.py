@@ -655,3 +655,40 @@ async def test_watch_history_is_stored_encrypted_replaced_per_day_and_kept_out_o
         raw = (await s.execute(text("select text from memory_items where kind = 'watch'"))).scalars().all()
     assert len(raw) == 2 and all("python" not in r and "Kelas" not in r for r in raw)
     assert await mem.learned(stack) == [] and await mem.search_items(stack, "python") == []
+
+
+async def test_a_connected_youtube_account_is_read_stored_encrypted_and_forgotten_on_disconnect(stack, monkeypatch):
+    from datetime import date
+
+    import httpx
+    from sqlalchemy import text
+
+    from apa import assistant_memory as mem
+    from apa import youtube_api
+
+    monkeypatch.setenv("YOUTUBE_CLIENT_ID", "cid")
+    monkeypatch.setenv("YOUTUBE_CLIENT_SECRET", "sec")
+    get_settings.cache_clear()
+    seen = []
+
+    def handler(req):
+        seen.append(str(req.url))
+        if "oauth2.googleapis.com/token" in str(req.url):
+            return httpx.Response(200, json={"access_token": "at", "refresh_token": "rt", "expires_in": 3600, "scope": youtube_api.SCOPE})
+        if "/videos" in str(req.url):
+            assert req.headers["authorization"] == "Bearer at" and "myRating=like" in str(req.url)
+            return httpx.Response(200, json={"items": [{"snippet": {"title": "Belajar python", "channelTitle": "Kelas Kode"}}]})
+        return httpx.Response(200, json={"items": [{"snippet": {"title": "Dapur Ani"}}]})
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+        assert not await youtube_api.connected(stack)
+        assert await youtube_api.poll(stack, http, "dc") == "connected" and await youtube_api.connected(stack)
+        assert await youtube_api.sync(stack, http, date.today()) == 2
+        assert await youtube_api.sync(stack, http, date.today()) == 2  # a second sync replaces, it does not double
+    async with stack() as s:
+        tokens = (await s.execute(text("select access_token_enc, refresh_token_enc from oauth_tokens where provider = 'youtube'"))).one()
+        raw = (await s.execute(text("select text from memory_items where kind = 'watch'"))).scalars().all()
+    assert "at" != tokens[0] and "rt" != tokens[1] and len(raw) == 2 and all("python" not in r and "Dapur" not in r for r in raw)
+    assert sorted(w["k"] for w in await mem.watched(stack, 5, date.today())) == ["liked", "subscribed"]
+    await youtube_api.disconnect(stack)
+    assert not await youtube_api.connected(stack) and await mem.watched(stack, 5, date.today()) == []

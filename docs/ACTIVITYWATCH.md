@@ -51,6 +51,18 @@ YouTube's API does not share watch history, so you export it yourself: Google Ta
 choose `watch-history.json` on the dashboard's **Diary** page (or `POST /import/youtube`). Channel and title of the last 90 days are
 kept, encrypted; the profile (`youtube`) names the channels and topics you come back to. Repeat the export now and then.
 
+### YouTube account (liked videos and follows)
+
+1. In [Google Cloud Console](https://console.cloud.google.com/) create a project and enable **YouTube Data API v3**.
+2. Configure the OAuth consent screen (External, add your own Google account as a test user).
+3. Create credentials > OAuth client ID > type **TVs and Limited Input devices**. Copy the client ID and secret.
+4. Put them in `/opt/apa/.env` as `YOUTUBE_CLIENT_ID` and `YOUTUBE_CLIENT_SECRET`, then `./deploy.sh up`.
+5. Dashboard > **Diary** > **Connect YouTube**: type the shown code at google.com/device and allow read-only access.
+
+The server then reads your liked videos (up to 200) and followed channels every night (a few quota units of the free 10,000). The
+account can be disconnected on the same page; that also deletes what it gave. The API gives no watch history, which is why the
+Takeout import above exists.
+
 ## The advertising ID
 
 The Android advertising ID is only a resettable number that ad networks use to recognise a phone: it holds no information about you

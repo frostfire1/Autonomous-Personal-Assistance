@@ -221,6 +221,64 @@ async def prune_chat_now(request: Request) -> dict:
     return {"diary_days_written": written, "keep_days": get_settings().chat_keep_days, **pruned}
 
 
+@router.get("/youtube")
+async def youtube_status() -> dict:
+    from apa import youtube_api
+
+    return {"configured": youtube_api.configured(), "connected": await youtube_api.connected(SessionLocal)}
+
+
+@router.post("/youtube/connect")
+async def youtube_connect() -> dict:
+    """Start connecting the YouTube account: returns a short code to type at google.com/device (no redirect needed)."""
+    from apa import youtube_api
+
+    try:
+        async with httpx.AsyncClient(timeout=20) as http:
+            return await youtube_api.start(http)
+    except youtube_api.YouTubeError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from None
+
+
+@router.post("/youtube/poll")
+async def youtube_poll(device_code: str = Body(embed=True, max_length=300)) -> dict:
+    """Has the owner entered the code yet? -> {"status": "pending" | "connected"}; connected also reads liked videos and follows."""
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+
+    from apa import youtube_api
+
+    try:
+        async with httpx.AsyncClient(timeout=20) as http:
+            status = await youtube_api.poll(SessionLocal, http, device_code)
+            items = await youtube_api.sync(SessionLocal, http, datetime.now(ZoneInfo(get_settings().timezone)).date()) if status == "connected" else 0
+    except youtube_api.YouTubeError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from None
+    return {"status": status, "items": items}
+
+
+@router.post("/youtube/sync")
+async def youtube_sync_now() -> dict:
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+
+    from apa import youtube_api
+
+    try:
+        async with httpx.AsyncClient(timeout=30) as http:
+            return {"items": await youtube_api.sync(SessionLocal, http, datetime.now(ZoneInfo(get_settings().timezone)).date())}
+    except youtube_api.YouTubeError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from None
+
+
+@router.delete("/youtube")
+async def youtube_disconnect() -> dict:
+    from apa import youtube_api
+
+    await youtube_api.disconnect(SessionLocal)
+    return {"ok": True}
+
+
 @router.post("/import/youtube")
 async def import_youtube(items: list[dict] = Body(max_length=50000)) -> dict:
     """The owner's Google Takeout `watch-history.json` (YouTube and YouTube Music > History, JSON). Keeps the channel and title of

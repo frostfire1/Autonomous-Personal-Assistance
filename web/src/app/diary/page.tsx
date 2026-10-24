@@ -11,6 +11,8 @@ export default function DiaryPage() {
   const [shared, setShared] = useState(false);
   const [msg, setMsg] = useState("");
   const [yt, setYt] = useState("");
+  const [ytMsg, setYtMsg] = useState("");
+  const { data: ytState, reload: ytReload } = useApi<{ configured: boolean; connected: boolean }>("/youtube");
 
   async function save() {
     if (!text.trim()) return;
@@ -42,6 +44,40 @@ export default function DiaryPage() {
           <span className="muted">{msg}</span>
         </div>
         <p className="muted">This page is only as private as the connection to it: use your home network or Tailscale or WireGuard, not the open internet.</p>
+      </div>
+
+      <h2>YouTube account</h2>
+      <div className="card">
+        <p className="muted">
+          Connect your YouTube account (read-only) so the assistant knows the videos you liked and the channels you follow. You type a short code on
+          google.com/device, on any device; no password is shared. It needs <code>YOUTUBE_CLIENT_ID</code> and <code>YOUTUBE_CLIENT_SECRET</code> in the server&apos;s .env
+          (see docs/ACTIVITYWATCH.md).
+        </p>
+        <div className="row">
+          {!ytState ? <span className="muted">Checking...</span> : ytState.connected ? (
+            <>
+              <span>Connected.</span>
+              <button onClick={async () => { const r = await post<{ items: number }>("/youtube/sync", {}); setYtMsg(`Read ${r.items} liked videos and follows.`); }}>Refresh now</button>
+              <button className="link" onClick={async () => { if (confirm("Disconnect YouTube and forget what it gave?")) { await del("/youtube"); ytReload(); } }}>Disconnect</button>
+            </>
+          ) : (
+            <button onClick={async () => {
+              try {
+                const d = await post<{ user_code: string; verification_url: string; device_code: string; interval: number }>("/youtube/connect", {});
+                setYtMsg(`Go to ${d.verification_url} and enter ${d.user_code}. Waiting...`);
+                for (let i = 0; i < 120; i++) {
+                  await new Promise((r) => setTimeout(r, (d.interval || 5) * 1000));
+                  const p = await post<{ status: string; items: number }>("/youtube/poll", { device_code: d.device_code });
+                  if (p.status === "connected") { setYtMsg(`Connected: ${p.items} liked videos and follows read.`); ytReload(); return; }
+                }
+                setYtMsg("The code expired: start again.");
+              } catch (e) {
+                setYtMsg((e as Error).message);
+              }
+            }}>Connect YouTube</button>
+          )}
+          <span className="muted">{ytMsg}</span>
+        </div>
       </div>
 
       <h2>YouTube history</h2>

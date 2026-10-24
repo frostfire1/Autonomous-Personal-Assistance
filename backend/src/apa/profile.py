@@ -211,18 +211,25 @@ def usage_trait(rows: list[tuple[date, str, str, str, int, datetime | None]], tz
 def watch_trait(items: list[tuple[str, str, str]]) -> Trait | None:
     """What the owner watches and searches on YouTube: (kind, channel, title) from their Takeout export."""
     watched = [(c, t) for k, c, t in items if k == "watched"]
-    if len(watched) < 10:
+    liked = [(c, t) for k, c, t in items if k == "liked"]
+    subs = [c for k, c, _ in items if k == "subscribed"]
+    if len(watched) < 10 and len(liked) < 5 and len(subs) < 5:
         return None
     channels = Counter(c for c, _ in watched if c).most_common(5)
-    words = Counter(w for _, t in watched for w in _WORD.findall(t.lower()) if w not in STOP)
+    words = Counter(w for _, t in watched + liked for w in _WORD.findall(t.lower()) if w not in STOP)
     topics = [w for w, n in words.most_common(8) if n >= 3][:6]
     searches = Counter(t.lower() for k, _, t in items if k == "searched").most_common(4)
-    text = f"On YouTube ({len(watched)} videos): mostly " + ", ".join(f"{c} ({n})" for c, n in channels) + "." if channels else f"Watched {len(watched)} videos on YouTube."
-    if topics:
+    text = f"On YouTube ({len(watched)} videos): mostly " + ", ".join(f"{c} ({n})" for c, n in channels) + "." if len(watched) >= 10 and channels else ""
+    if subs:
+        text += f" Follows {len(subs)} channels, among them " + ", ".join(subs[:6]) + "."
+    if len(liked) >= 5:
+        fav = Counter(c for c, _ in liked if c).most_common(4)
+        text += " Liked videos come mostly from " + ", ".join(f"{c} ({n})" for c, n in fav) + "."
+    if topics and len(watched) >= 10:
         text += " Topics that keep coming up: " + ", ".join(topics) + "."
     if searches:
         text += " Searched for: " + ", ".join(t for t, _ in searches) + "."
-    return Trait("youtube", text, len(watched), {"channels": channels, "topics": topics, "searches": searches})
+    return Trait("youtube", text.strip(), len(watched) + len(liked) + len(subs), {"channels": channels, "topics": topics, "searches": searches, "subscriptions": len(subs)})
 
 
 def habits_trait(obs: list[tuple[str, str]]) -> Trait | None:
