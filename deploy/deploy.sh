@@ -171,10 +171,27 @@ web() {
   $CE run -d --name web --network $NET --restart unless-stopped -p "$WEB_PORT:3000" $WEB_IMG >/dev/null
   status
 $CE image prune -f >/dev/null 2>&1 || true  # every build leaves the previous image behind (about 850 MB each): drop the unused ones
+  prune_stale_ports
   echo "dashboard: http://$(hostname -I 2>/dev/null | awk '{print $1}' || echo localhost):$WEB_PORT (sign in with INGEST_API_KEY from .env)"
 }
 
 status() { $CE ps -a --format 'table {{.Names}}\t{{.Status}}\t{{.Ports}}'; }
+
+prune_stale_ports() {  # netavark can leave the port rule of a removed container behind; the first rule that matches a port wins, so the published port stops answering
+  [ "$CE" = podman ] && command -v nft >/dev/null 2>&1 || return 0
+  local live line chain ip h
+  live=" $($CE ps -q | xargs -r $CE inspect --format '{{range .NetworkSettings.Networks}}{{.IPAddress}} {{end}}' 2>/dev/null | tr '
+' ' ') "
+  nft -a list table inet netavark 2>/dev/null | while read -r line; do
+    case "$line" in
+      "chain "*) chain="${line#chain }"; chain="${chain%% *}";;
+      *"dnat ip to "*)
+        ip="${line##*dnat ip to }"; ip="${ip%%:*}"; h="${line##*handle }"
+        case "$live" in *" $ip "*) ;; *) nft delete rule inet netavark "$chain" handle "$h" 2>/dev/null && echo "removed a stale port rule (container $ip is gone)";; esac;;
+    esac
+  done
+  return 0
+}
 
 backup() {  # a compressed dump of the database into BACKUP_DIR (default ./backups); files older than BACKUP_KEEP_DAYS (14) are removed
   [ "$DB_MODE" = bundled ] || { echo "backup: DB_MODE=external, dump your own database with your own tools"; exit 1; }
