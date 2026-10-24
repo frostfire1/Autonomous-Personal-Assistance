@@ -1073,3 +1073,37 @@ async def test_the_telegram_notifier_sends_a_gif_as_an_animation_and_falls_back_
     plain = Bot(False)
     await TelegramNotifier(plain, 1).send("Hi [[gif:https://evil.example/x.gif]]")
     assert plain.calls == [("message", "Hi")]
+
+
+async def test_the_diary_is_written_automatically_an_edit_is_kept_and_a_deleted_day_stays_deleted(stack):
+    from datetime import date, datetime
+
+    from apa import assistant_memory as mem
+    from apa import daily, usage
+
+    now = datetime.now(TZ)
+    day = now.date()
+    await usage.store(stack, "phone", "android", day, [{"app": "Mobile Legends", "seconds": 5400}, {"app": "YouTube", "seconds": 1800}])
+    await mem.add_watch(stack, {day: [{"k": "watched", "c": "Delta Force ID", "t": "Season baru"}]})
+    seen = []
+    state = {"text": "Hari ini aku main game hampir seharian dan nonton video."}
+
+    class Llm:
+        async def complete(self, route, system, user, **kw):
+            seen.append(user)
+            return LLMResult(json.dumps({"headline": "A day of games and videos", "personality": ["playful"], "mood": 4, "energy": "medium",
+                                         "focus": "games", "note": "Mostly games.", "diary": state["text"]}), "fake", 10, 10, 0)
+
+    assert await daily.build_day(stack, Llm(), TZ, day)  # nobody wrote anything: the entry comes from the data alone
+    snap = await mem.get_day(stack, day)
+    assert snap["diary"] == state["text"] and "STYLE" in seen[0] and "Mobile Legends" in seen[0]
+
+    # the owner edits it: the night job leaves it alone, an explicit rewrite (force) does not
+    await mem.add_day(stack, day, {**snap, "diary": "Aku tulis sendiri.", "edited": True})
+    state["text"] = "Teks baru dari AI."
+    assert not await daily.build_day(stack, Llm(), TZ, day) and (await mem.get_day(stack, day))["diary"] == "Aku tulis sendiri."
+    assert await daily.build_day(stack, Llm(), TZ, day, force=True) and (await mem.get_day(stack, day))["diary"] == "Teks baru dari AI."
+
+    # deleting a day removes it from everything, and the night job does not bring it back
+    assert await mem.delete_day(stack, day) and await mem.days(stack, 5, day) == []
+    assert not await daily.build_day(stack, Llm(), TZ, day) and await mem.days(stack, 5, day) == [] and not await mem.delete_day(stack, date(2001, 1, 1))

@@ -392,6 +392,39 @@ async def days_list(n: int = 30) -> dict:
     return {"days": [{k: v for k, v in d.items() if k != "facts"} for d in reversed(snaps)]}
 
 
+@router.put("/days/{day}")
+async def days_edit(day: str, diary: str = Body(embed=True, max_length=1500)) -> dict:
+    """The owner corrects the diary entry of a day. An edited entry is never rewritten by the nightly job."""
+    from datetime import date
+
+    from apa import assistant_memory
+
+    try:
+        d = date.fromisoformat(day)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="day must be YYYY-MM-DD") from None
+    snap = await assistant_memory.get_day(SessionLocal, d)
+    if snap is None or len(diary.strip()) < 3:
+        raise HTTPException(status_code=404, detail="no such day")
+    await assistant_memory.add_day(SessionLocal, d, {**snap, "diary": " ".join(diary.split()), "edited": True})
+    return {"ok": True}
+
+
+@router.delete("/days/{day}")
+async def days_delete(day: str) -> dict:
+    from datetime import date
+
+    from apa import assistant_memory
+
+    try:
+        d = date.fromisoformat(day)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="day must be YYYY-MM-DD") from None
+    if not await assistant_memory.delete_day(SessionLocal, d):
+        raise HTTPException(status_code=404, detail="no such day")
+    return {"ok": True}
+
+
 @router.post("/days/build")
 async def days_build(request: Request, day: str | None = Body(default=None, embed=True)) -> dict:
     """Write the snapshot of a day now (default: today), and refresh the long-term personality. They also run every night."""
@@ -405,7 +438,7 @@ async def days_build(request: Request, day: str | None = Body(default=None, embe
         d = date.fromisoformat(day) if day else datetime.now(tz).date()
     except ValueError:
         raise HTTPException(status_code=400, detail="day must be YYYY-MM-DD") from None
-    built = await daily.build_day(SessionLocal, request.app.state.llm, tz, d)
+    built = await daily.build_day(SessionLocal, request.app.state.llm, tz, d, force=True)
     return {"built": built, "day": d.isoformat(), "persona": await daily.persona(SessionLocal, request.app.state.llm, d, force=True)}
 
 

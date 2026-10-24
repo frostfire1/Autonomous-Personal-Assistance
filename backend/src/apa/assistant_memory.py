@@ -317,6 +317,25 @@ async def add_day(sm: async_sessionmaker, day: date, snap: dict) -> None:
         await s.commit()
 
 
+async def get_day(sm: async_sessionmaker, day: date) -> dict | None:
+    for r in await _items(sm, MemoryItem.kind == DAY, MemoryItem.day == day):
+        try:
+            d = json.loads(_open(r))
+        except ValueError:
+            continue
+        if isinstance(d, dict):
+            return d
+    return None
+
+
+async def delete_day(sm: async_sessionmaker, day: date) -> bool:
+    """Remove the entry of a day for good: a marker stays so the nightly job does not write it again."""
+    if await get_day(sm, day) is None:
+        return False
+    await add_day(sm, day, {"date": day.isoformat(), "deleted": True, "edited": True})
+    return True
+
+
 async def days(sm: async_sessionmaker, n: int = 30, today: date | None = None) -> list[dict]:
     """The snapshots of the last `n` days, oldest first."""
     since = (today or date.today()) - timedelta(days=n)
@@ -326,7 +345,7 @@ async def days(sm: async_sessionmaker, n: int = 30, today: date | None = None) -
             d = json.loads(_open(r))
         except ValueError:
             continue
-        if isinstance(d, dict):
+        if isinstance(d, dict) and not d.get("deleted"):
             out.append(d)
     return out
 

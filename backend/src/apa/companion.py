@@ -36,7 +36,7 @@ RECENT_KEY = "apa:companion:recent"
 SLOTS = (
     (8, 10.5, "morning", "a warm good-morning in your own words; ask about their plan for today or how they slept, or bring up something they said they would do"),
     (12, 14.5, "midday", "a light check-in: how the day is going, whether they ate, or a follow-up on something from the last days (a plan, a goal, a thing they were unsure about)"),
-    (19, 21.5, "evening", "a relaxed evening chat: how the day went, or something they enjoy (a game, a channel, music); you may gently remind them that /diary is there if they feel like writing"),
+    (19, 21.5, "evening", "a relaxed evening chat: how the day went, or something they enjoy (a game, a channel, music)"),
 )
 SYSTEM = (
     "You are the owner's close friend and personal companion, starting a conversation by yourself. Write ONE short, natural message "

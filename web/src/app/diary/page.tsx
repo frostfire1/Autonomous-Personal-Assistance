@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { del, post, put, useApi } from "@/lib/api";
 
+type Day = { date: string; headline: string; diary?: string; tags?: string[]; mood?: number | null; energy?: string | null; edited?: boolean };
 type Entry = { id: number; date: string | null; text: string; shared: boolean; created_at: string };
 
 export default function DiaryPage() {
@@ -10,6 +11,9 @@ export default function DiaryPage() {
   const [text, setText] = useState("");
   const [shared, setShared] = useState(false);
   const [msg, setMsg] = useState("");
+  const { data: days, reload: reloadDays } = useApi<{ days: Day[] }>("/days?n=60");
+  const [edit, setEdit] = useState<Record<string, string>>({});
+  const [dayMsg, setDayMsg] = useState("");
   const [yt, setYt] = useState("");
   const [ytMsg, setYtMsg] = useState("");
   const { data: ytState, reload: ytReload } = useApi<{ configured: boolean; connected: boolean }>("/youtube");
@@ -31,9 +35,36 @@ export default function DiaryPage() {
   return (
     <>
       <h1>Diary</h1>
+      <h2>Your diary, written for you</h2>
       <div className="card">
         <p className="muted">
-          Write what you did, what you liked and what you did not. Entries are encrypted on the server and are <b>private by default</b>:
+          You do not have to write anything: every night the assistant writes your day in your own voice from what you chatted about, what you
+          bought, which apps you used, what you watched and how you slept. Correct or delete any entry; an entry you edit is never rewritten.
+        </p>
+        <div className="row">
+          <button onClick={async () => { setDayMsg("Writing..."); try { const r = await post<{ built: boolean }>("/days/build", {}); setDayMsg(r.built ? "Today's entry is written." : "Not enough happened today yet."); reloadDays(); } catch (e) { setDayMsg((e as Error).message); } }}>Write today&apos;s entry now</button>
+          <span className="muted">{dayMsg}</span>
+        </div>
+      </div>
+      {!days ? <p className="muted">Loading...</p> : days.days.filter((d) => d.diary).length === 0 ? <p className="muted">No entries yet: the first one is written tonight.</p> : (
+        days.days.filter((d) => d.diary).map((d) => (
+          <div className="card" key={d.date} style={{ marginBottom: 8 }}>
+            <div className="muted">{d.date} · {d.headline}{d.edited ? " · edited by you" : ""}{d.tags && d.tags.length ? ` · ${d.tags.join(", ")}` : ""}</div>
+            <textarea rows={4} style={{ width: "100%" }} value={edit[d.date] ?? d.diary ?? ""} onChange={(e) => setEdit({ ...edit, [d.date]: e.target.value })} />
+            <div className="row">
+              {edit[d.date] !== undefined && edit[d.date] !== d.diary && (
+                <button onClick={async () => { await put(`/days/${d.date}`, { diary: edit[d.date] }); setEdit({ ...edit, [d.date]: undefined as unknown as string }); reloadDays(); }}>Save change</button>
+              )}
+              <button className="link" onClick={async () => { if (confirm("Delete this day's entry for good?")) { await del(`/days/${d.date}`); reloadDays(); } }}>Delete</button>
+            </div>
+          </div>
+        ))
+      )}
+
+      <h2>Private notes (optional)</h2>
+      <div className="card">
+        <p className="muted">
+          Only if you want to write something yourself: entries are encrypted on the server and are <b>private by default</b>:
           the AI never sees them. Tick &quot;Let the assistant read this&quot; only for an entry you want it to know about (long numbers are hidden
           from it even then). In Telegram you can also type <code>/diary your entry</code>: it is saved encrypted and your message is deleted from the chat.
         </p>

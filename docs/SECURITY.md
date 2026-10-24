@@ -16,6 +16,14 @@ get the strictest handling.
 | **Deleting is deleting** | Deleting an entry removes its row. |
 | **/private chats** | Never stored anywhere (RAM only), so they can never reach the diary or the memory. |
 
+## The automatic diary
+
+You do not have to write a diary: every night the assistant writes your day in your own voice from your chats, purchases, app time,
+YouTube and sleep (Diary page; you can correct or delete any entry, and an entry you edit is never rewritten). The entries are
+stored encrypted. To write them, the facts of the day and the chat are sent to the AI provider like any other chat message. For
+something that must stay out of everything, use a `/private` chat (never stored) or the optional private notes on the Diary page
+(never sent to the AI).
+
 ## What the AI provider sees
 
 The assistant (a model run by the provider you chose) sees: your recent chat messages, your latest transactions and budgets, the

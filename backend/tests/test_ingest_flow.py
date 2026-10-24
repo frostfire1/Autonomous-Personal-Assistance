@@ -947,3 +947,11 @@ def test_a_notice_rewrite_may_not_change_a_number_and_the_undo_link_is_kept():
     body, flagged, token = natural.split_summary(original)
     assert body == "Kopi · Rp25.000 · Pos: Makan · Kasir: GoPay" and flagged and token == "/undo_8f9a2b"
     assert natural.keeps_numbers(body, "Kopi Rp25.000 udah kucatat di Makan") and not natural.keeps_numbers(body, "Kopi Rp52.000 udah kucatat")
+
+
+def test_the_day_reply_carries_a_first_person_diary_entry():
+    from apa import daily
+
+    out = daily.parse_day('{"headline": "A quiet day of games", "diary": "Hari ini aku main game seharian dan makan sate malamnya.", "mood": 4}')
+    assert out and out["diary"].startswith("Hari ini aku main game") and out["mood"] == 4
+    assert daily.parse_day('{"headline": "A quiet day"}')["diary"] == ""
