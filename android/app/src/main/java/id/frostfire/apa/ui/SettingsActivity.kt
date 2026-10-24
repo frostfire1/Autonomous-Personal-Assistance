@@ -160,7 +160,7 @@ class SettingsActivity : ComponentActivity() {
         bgStatus = TextView(this).also(col::addView)
         button("Turn off battery saving for APA") { requestBatteryExemption() }
         button("Open autostart settings (${android.os.Build.MANUFACTURER})") { openVendorSettings() }
-        button("Rebind notification listener") { rebindListener() }
+        button("Re-link notification listener") { rebindListener() }
         label("Resend queue every (minutes), a safety net if a trigger is missed")
         syncSpin = Spinner(this).also(col::addView)
         syncSpin.adapter = ArrayAdapter(this, android.R.layout.simple_spinner_dropdown_item, BackgroundHelp.SYNC_CHOICES.map { "$it min" })
@@ -236,6 +236,8 @@ class SettingsActivity : ComponentActivity() {
         val notify = NotificationManagerCompat.from(this).areNotificationsEnabled()
         return listOf(
             BackgroundHelp.Check("Notification access (reads bank notifications)", listener, "without this, bank notifications are not read"),
+            BackgroundHelp.Check("Notification listener connected", cfg.listenerUp,
+                "Android stopped the app: turn Autostart on and press Re-link notification listener"),
             BackgroundHelp.Check("App notifications allowed", notify, "the morning briefing cannot show in the notification bar"),
             BackgroundHelp.Check("Battery saving turned off for APA", pm.isIgnoringBatteryOptimizations(packageName),
                 "the phone may freeze the app and the queue will not be sent"),
@@ -476,6 +478,14 @@ class SettingsActivity : ComponentActivity() {
     override fun onResume() {
         super.onResume()
         refresh()
+        if (cfg.configured()) {
+            lifecycleScope.launch {
+                runCatching {
+                    val version = runCatching { packageManager.getPackageInfo(packageName, 0).versionName }.getOrNull() ?: "0.2.0"
+                    Api(cfg).heartbeat(cfg.listenerUp, Outbox(this@SettingsActivity).pendingCount(), version)
+                }
+            }
+        }
         lifecycleScope.launch { runCatching { LocationPush.push(this@SettingsActivity) } }  // keeps the weather's position fresh
     }
 }

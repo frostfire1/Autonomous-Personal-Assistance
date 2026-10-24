@@ -38,7 +38,7 @@ from apa.news import jobs as news_jobs
 from apa.news.telegram import daily_telegram
 from apa.pipeline.chat import run_chat, run_master
 from apa.pipeline.commit import DebateUnavailable, record_reply, run_commit, run_release
-from apa.pipeline.extract import run_extract
+from apa.pipeline.extract import notify_unrecorded, run_extract
 from apa.pipeline.receipt import AlbumStillArriving, run_read_receipt
 from apa.pipeline.reconcile import run_reconcile
 from apa.prices import check as price_check
@@ -124,6 +124,14 @@ async def process_inbound_event(ctx: dict, event_id: int) -> str:
         status = event.status
         await session.commit()
     log.info("event_processed", event_id=event_id, source=event.source, status=status)
+    if event.source == "android_listener" and status == "skipped" and ctx.get("notifier") is not None:
+        try:  # telling the owner is a courtesy: it must never fail the event
+            await notify_unrecorded(
+                ctx.get("sessionmaker", SessionLocal), ctx["notifier"], event_id, event.payload.get("package", ""), text,
+                event.payload.get("skip_reason", ""),
+            )
+        except Exception as exc:
+            log.warning("unrecorded_notice_failed", error=type(exc).__name__)
     # Enqueue only after the commit above so the next job always sees the status it expects.
     if batch_items and ctx.get("redis") is not None:
         card = await batch_flow.start(ctx.get("sessionmaker", SessionLocal), ctx["redis"], batch_items, tz)
@@ -273,6 +281,42 @@ async def briefing_precompute(ctx: dict) -> None:
     )
 
 
+PHONE_SILENT_HOURS = 4  # no word from the phone for this long: bank notifications are probably not being collected
+PHONE_ALERT_EVERY_S = 12 * 3600
+
+
+async def phone_watch(ctx: dict) -> str:
+    """Tells the owner when the phone stops collecting: the app has not checked in, or its notification listener is
+    disconnected (a phone maker stopped the app). Silent otherwise, and at most one message per kind per 12 hours."""
+    import json
+
+    redis = ctx.get("redis")
+    if redis is None:
+        return "no_redis"
+    raw = await redis.get("apa:phone:heartbeat")
+    if not raw:
+        return "never_seen"  # the app has never reported: nothing to watch yet
+    hb = json.loads(raw)
+    age_h = (datetime.now(UTC).timestamp() - hb["ts"]) / 3600
+    kind = text = None
+    if age_h >= PHONE_SILENT_HOURS:
+        kind, text = "silent", (
+            f"\U0001F4F5 HP belum melapor ke server sejak {int(age_h)} jam. Notifikasi bank tidak terkumpul selama itu. "
+            "Buka aplikasi APA di HP; kalau sering terjadi, nyalakan Autostart dan pilih Tanpa batasan di pengaturan baterai."
+        )
+    elif not hb.get("listener", True):
+        kind, text = "listener", (
+            "\U0001F514 Pendengar notifikasi di HP terputus (HP mematikan aplikasi), jadi notifikasi bank tidak terbaca. "
+            "Buka APA lalu ketuk «Re-link notification listener», dan pastikan Autostart menyala."
+        )
+    if kind is None:
+        return "ok"
+    if not await redis.set(f"apa:phone:alert:{kind}", "1", ex=PHONE_ALERT_EVERY_S, nx=True):
+        return "already_told"
+    await ctx["notifier"].send(text)
+    return kind
+
+
 async def briefing_telegram(ctx: dict) -> int:
     """The complete text briefing to Telegram on request (the app's "play now" buttons). -> messages sent."""
     tz = ZoneInfo(get_settings().timezone)
@@ -413,10 +457,11 @@ class WorkerSettings:
     max_tries = COMMIT_MAX_TRIES
     functions = [
         process_inbound_event, commit_event, extract_event, master_event, chat_event, reconcile_event,
-        read_receipt, release_quarantined, briefing_telegram,
+        read_receipt, release_quarantined, briefing_telegram, phone_watch,
     ]
     cron_jobs = [
         cron(sheets_sync, second=0, run_at_startup=False),  # every 60 s
+        cron(phone_watch, minute={5, 35}, run_at_startup=False),
         cron(steward_tick, minute={3, 13, 23, 33, 43, 53}, run_at_startup=False),  # every 10 min
         cron(cyberramen_poll, minute={0, 10, 20, 30, 40, 50}),
         cron(news_ingest, minute={0, 15, 30, 45}),

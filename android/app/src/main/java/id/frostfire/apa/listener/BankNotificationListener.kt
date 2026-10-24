@@ -1,5 +1,6 @@
 package id.frostfire.apa.listener
 
+import android.content.ComponentName
 import android.os.Handler
 import android.os.Looper
 import android.service.notification.NotificationListenerService
@@ -30,6 +31,17 @@ class BankNotificationListener : NotificationListenerService() {
         val title = extras.getCharSequence("android.title")?.toString()?.let { Scrubber.scrub(it).take(200) }
         val key = IdempotencyKey.of(pkg, sbn.postTime, clean)
         if (Outbox(this).insert(key, pkg, title, clean, sbn.postTime)) SyncWorker.enqueue(this)
+    }
+
+    override fun onListenerConnected() {
+        super.onListenerConnected()
+        Config(this).apply { listenerUp = true; listenerAt = System.currentTimeMillis() }
+    }
+
+    override fun onListenerDisconnected() {
+        super.onListenerDisconnected()
+        Config(this).apply { listenerUp = false; listenerAt = System.currentTimeMillis() }
+        runCatching { requestRebind(ComponentName(this, BankNotificationListener::class.java)) }
     }
 
     override fun onNotificationRemoved(sbn: StatusBarNotification) {

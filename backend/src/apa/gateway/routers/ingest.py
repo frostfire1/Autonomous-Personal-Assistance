@@ -16,6 +16,8 @@ from apa.ingestion.packages import AppIn, register
 
 router = APIRouter(prefix="/ingest", tags=["ingest"])
 
+HEARTBEAT_KEY = "apa:phone:heartbeat"
+
 
 SIGNATURE_WINDOW_S = 300
 RATE_KEY = "apa:ratelimit:ingest:"
@@ -71,6 +73,25 @@ async def register_packages(body: PackagesIn, session: AsyncSession = Depends(ge
     anything that is not a valid package name are dropped; the answer lists what is now listened to."""
     picks = await register(session, body.apps)
     return {"ok": True, "listening_extra": picks}
+
+
+class HeartbeatIn(BaseModel):
+    listener: bool  # the phone's notification listener is connected to the system
+    pending: int = Field(default=0, ge=0, le=100000)  # notifications waiting in the phone's queue
+    version: str = Field(default="", max_length=20)
+
+
+@router.post("/heartbeat", dependencies=[Depends(require_ingest_key)])
+async def heartbeat(body: HeartbeatIn, request: Request) -> dict[str, object]:
+    """The app says it is alive and whether its notification listener is connected. If the phone goes quiet, or the listener
+    is disconnected, the owner is told in Telegram (see workers phone_watch)."""
+    import json
+
+    await request.app.state.arq.set(
+        HEARTBEAT_KEY, json.dumps({"ts": time.time(), "listener": body.listener, "pending": body.pending, "version": body.version}),
+        ex=14 * 86400,
+    )
+    return {"ok": True}
 
 
 @router.post(

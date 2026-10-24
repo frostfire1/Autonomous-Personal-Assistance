@@ -220,3 +220,53 @@ async def test_skipped_events_enqueue_nothing(monkeypatch):
     _patch_session(monkeypatch, ev)
     q = _Q()
     assert await worker.process_inbound_event({"redis": q}, 1) == "skipped" and q.jobs == []
+
+
+# ---- the phone watch: the owner is told when the phone stops collecting ---------------------------------------------------------
+
+
+def _watch(heartbeat, *, told=False):
+    import asyncio
+    import json
+    import time
+
+    from apa.workers.settings import phone_watch
+
+    class Redis:
+        def __init__(self):
+            self.kv = {"apa:phone:alert:" + k: "1" for k in (["silent", "listener"] if told else [])}
+            if heartbeat is not None:
+                self.kv["apa:phone:heartbeat"] = json.dumps({**heartbeat, "ts": time.time() - heartbeat.get("age_h", 0) * 3600})
+
+        async def get(self, key):
+            return self.kv.get(key)
+
+        async def set(self, key, value, ex=None, nx=False):
+            if nx and key in self.kv:
+                return None
+            self.kv[key] = value
+            return True
+
+    class Notifier:
+        sent: list = []
+
+        async def send(self, text):
+            self.sent.append(text)
+
+    n = Notifier()
+    n.sent = []
+    result = asyncio.run(phone_watch({"redis": Redis(), "notifier": n}))
+    return result, n.sent
+
+
+def test_phone_watch_is_silent_when_the_phone_is_fine_or_has_never_reported():
+    assert _watch(None) == ("never_seen", [])
+    assert _watch({"listener": True, "pending": 0, "age_h": 0.2}) == ("ok", [])
+
+
+def test_phone_watch_tells_the_owner_once_when_the_phone_goes_quiet_or_the_listener_drops():
+    result, sent = _watch({"listener": True, "pending": 3, "age_h": 6})
+    assert result == "silent" and "belum melapor" in sent[0] and "6 jam" in sent[0]
+    result, sent = _watch({"listener": False, "pending": 0, "age_h": 0.1})
+    assert result == "listener" and "terputus" in sent[0]
+    assert _watch({"listener": False, "pending": 0, "age_h": 0.1}, told=True) == ("already_told", [])  # one message per 12 hours

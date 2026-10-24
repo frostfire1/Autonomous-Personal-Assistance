@@ -66,6 +66,12 @@ class Api(private val cfg: Config) {
     /** Ask the server to also send the complete text briefing to Telegram (the manual "play now" buttons do this). */
     suspend fun sendBriefingToTelegram(): Result = call(builder("/briefing/telegram").post("".toRequestBody(JSON)).build())
 
+    /** Tells the server the app is alive, whether the notification listener is connected, and how many rows wait unsent. */
+    suspend fun heartbeat(listener: Boolean, pending: Int, version: String): Result {
+        val body = JSONObject().put("listener", listener).put("pending", pending).put("version", version)
+        return call(builder("/ingest/heartbeat").post(body.toString().toRequestBody(JSON)).build())
+    }
+
     suspend fun getPrefs(): Result = call(builder("/prefs").get().build())
 
     suspend fun putPrefs(body: JSONObject): Result = call(builder("/prefs").put(body.toString().toRequestBody(JSON)).build())
