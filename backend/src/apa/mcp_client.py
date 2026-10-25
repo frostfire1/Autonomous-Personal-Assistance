@@ -176,7 +176,9 @@ async def refresh(sm: async_sessionmaker, server_id: str) -> ServerCfg:
     except McpError:
         raise
     except Exception as exc:
-        raise McpError(f"Could not connect ({type(exc).__name__}). Check the address and the token.") from exc
+        from apa.mcp_oauth import why
+
+        raise McpError(f"Could not connect: {why(exc)}. Check the address and the token.") from exc
     c.tools = [_summary(t) for t in tools.tools][:60]
     c.refreshed_at = time.time()
     await save([c if x.id == c.id else x for x in servers], sm)

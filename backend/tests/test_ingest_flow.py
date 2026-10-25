@@ -1101,6 +1101,31 @@ def test_the_mcp_login_keeps_its_tokens_and_refuses_an_address_without_a_code(mo
             await mcp_oauth.finish(p.id, "http://localhost:8787/callback?state=abc")
         with pytest.raises(mcp_client.McpError, match="refused"):
             await mcp_oauth.finish(p.id, "http://localhost:8787/callback?error=access_denied")
+        q = mcp_oauth.Pending("Nutrition", "https://nutrition-mcp.com/mcp")  # the server's own name (iss) must travel with the code
+        q.task = asyncio.get_running_loop().create_future()
+        q.task.set_result("cfg")
+        mcp_oauth._pending[q.id] = q
+        assert await mcp_oauth.finish(q.id, "http://localhost:8787/callback?code=abc&state=st&iss=https%3A%2F%2Fnutrition-mcp.com") == "cfg"
+        assert q.code.result() == {"code": "abc", "state": "st", "iss": "https://nutrition-mcp.com"}
+        assert "missing iss" in mcp_oauth.why(ExceptionGroup("x", [ExceptionGroup("y", [RuntimeError("missing iss")])]))
 
     asyncio.run(go())
     get_settings.cache_clear()
+
+
+def test_a_food_photo_reading_is_validated_and_becomes_the_owners_message():
+    import json
+
+    from apa import meal
+
+    good = json.dumps({"kind": "meal", "dishes": [{"name": "Nasi   goreng", "portion": "1 plate", "grams": 300}, {"name": "", "portion": "x"}, {"name": "teh", "grams": "lots"}],
+                       "note": "portion is a guess"})
+    read = meal.parse("```json\n" + good + "\n```")
+    assert read and [d["name"] for d in read["dishes"]] == ["Nasi goreng", "teh"] and read["dishes"][0]["grams"] == 300 and read["dishes"][1]["grams"] is None
+    for bad in ('{"kind": "other", "dishes": []}', '{"kind": "meal", "dishes": []}', '{"kind": "person", "dishes": [{"name": "x"}]}', "not json", "[]", ""):
+        assert meal.parse(bad) is None
+    text = meal.to_message(read, " makan siang ")
+    assert text.startswith("I just sent a photo of my meal (makan, meal). The picture shows: Nasi goreng (1 plate, about 300 g); teh.")
+    assert "Note about the photo: portion is a guess" in text and "My caption: «makan siang»" in text and text.endswith("what it roughly adds up to.")
+    drink = meal.to_message({"kind": "drink", "dishes": [{"name": "es teh", "portion": "300 ml", "grams": None}], "note": ""})
+    assert "a drink" in drink and "es teh (300 ml)" in drink and "My caption" not in drink

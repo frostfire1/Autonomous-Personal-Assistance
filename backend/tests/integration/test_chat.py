@@ -1370,3 +1370,53 @@ async def test_a_specialist_takes_the_conversation_by_topic_and_keeps_it_for_the
     await redis.delete(mcp_client.STICKY_KEY)
     await converse(stack, Llm(), redis, "apa kabar hari ini", "(none)", TZ, now)  # no topic, nobody in charge: the master with every skill
     assert "SPECIALIST ROLE" not in seen[-1][0] and "nutrition.log_meal" in seen[-1][1] and "home.lamp" in seen[-1][1]
+
+
+async def test_a_photo_of_food_goes_to_the_assistant_and_anything_else_still_gets_the_receipt_reply(stack, redis, tmp_path):
+    from datetime import datetime
+
+    from apa import meal
+    from apa.ingestion.photo_intake import intake_photo
+    from apa.integrations.evidence_store import LocalEvidenceStore
+    from apa.workers import settings as worker
+    from tests.integration.helpers import FakeNotifier
+    from tests.integration.test_receipts import Q, jpeg
+
+    store = LocalEvidenceStore(tmp_path / "evidence")
+    seen = []
+    meal_reply = {"kind": "meal", "dishes": [{"name": "nasi goreng", "portion": "1 plate", "grams": 300}, {"name": "telur mata sapi", "portion": "1", "grams": None}],
+                  "note": "the portion is a guess"}
+    answers = {"meal": meal_reply}
+
+    class Llm:
+        async def complete(self, route, system, user, **kw):
+            if kw.get("images"):
+                if system == meal.SYSTEM:
+                    return LLMResult(json.dumps(answers["meal"]), "fake", 5, 5, 0)
+                return LLMResult(json.dumps({"is_receipt": False, "confidence": 0.9}), "fake", 5, 5, 0)
+            seen.append(user)
+            return LLMResult(json.dumps({"say": "Nasi goreng dan telur, sekitar 550 kkal (perkiraan)."}), "fake", 5, 5, 0)
+
+    n, q = FakeNotifier(), Q()
+    ctx = {"sessionmaker": stack, "llm": Llm(), "store": store, "notifier": n, "redis": q, "job_try": 1}
+    sent_at = datetime.now(TZ)
+    intake = await intake_photo(stack, q, store, chat_id=1, message_id=9101, data=jpeg(71), mime="image/jpeg", caption="makan siang", sent_at=sent_at)
+    assert await worker.read_receipt(ctx, intake.event_id) == "skipped"
+    assert ("meal_event", intake.event_id) in q.jobs and n.sent == []  # no "could not be read as a receipt" reply
+    async with stack() as s:
+        from sqlalchemy import select
+
+        ev = (await s.execute(select(InboundEvent).where(InboundEvent.id == intake.event_id))).scalar_one()
+    assert ev.payload["meal"]["dishes"][0]["name"] == "nasi goreng" and ev.payload["skip_reason"] == "not_a_receipt"
+
+    ctx2 = {**ctx, "redis": redis}
+    assert await worker.meal_event(ctx2, intake.event_id) == "sent"
+    assert n.sent == ["Nasi goreng dan telur, sekitar 550 kkal (perkiraan)."] and await worker.meal_event(ctx2, intake.event_id) == "already_done"
+    assert "my meal" in seen[0] and "nasi goreng (1 plate, about 300 g)" in seen[0] and "telur mata sapi (1)" in seen[0] and "makan siang" in seen[0] and "estimates" in seen[0]
+
+    # a photo that is neither a receipt nor food: the old reply, and nothing queued for the assistant
+    answers["meal"] = {"kind": "other", "dishes": [], "note": ""}
+    n2, q2 = FakeNotifier(), Q()
+    intake2 = await intake_photo(stack, q2, store, chat_id=1, message_id=9102, data=jpeg(72), mime="image/jpeg", caption=None, sent_at=sent_at)
+    assert await worker.read_receipt({**ctx, "notifier": n2, "redis": q2}, intake2.event_id) == "skipped"
+    assert len(n2.sent) == 1 and "tidak terbaca sebagai struk" in n2.sent[0] and ("meal_event", intake2.event_id) not in q2.jobs

@@ -83,6 +83,7 @@ ignore = ["B008"]  # FastAPI Depends() in defaults is the framework idiom
 "src/apa/mcp_client.py" = ["E501"]
 "src/apa/mcp_oauth.py" = ["E501"]
 "src/apa/routines.py" = ["E501"]
+"src/apa/meal.py" = ["E501"]
 "src/apa/natural.py" = ["E501"]
 "src/apa/integrations/notify.py" = ["E501"]
 "src/apa/companion.py" = ["E501"]

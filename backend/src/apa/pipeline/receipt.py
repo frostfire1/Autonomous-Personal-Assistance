@@ -99,6 +99,7 @@ async def run_read_receipt(
         payload = dict(ev.payload)
         await s.commit()
 
+    meal_read = None
     try:
         attachments = payload["attachments"]
         images = [(await store.get(a["uri"]), a.get("mime", "image/jpeg")) for a in attachments]
@@ -108,6 +109,12 @@ async def run_read_receipt(
             llm, images, payload.get("caption") or "",
             sent_at=datetime.fromisoformat(payload["sent_at"]), tz=tz,
         )
+        not_a_receipt = result.status == "skipped" and result.reason in ("not_a_receipt", "no_receipt_page")
+        if not_a_receipt and not payload.get("steward"):
+            from apa import meal
+
+            # a photo of food goes to the assistant, not to the error reply
+            meal_read = await meal.read(llm, images, payload.get("caption") or "")
     except (EvidenceError, KeyError):
         result = Extraction("needs_review", reason="image_unavailable")
     except LLMUnavailable:
@@ -129,6 +136,10 @@ async def run_read_receipt(
         elif quiet:
             out["skip_reason" if result.status == "skipped" else "review_reason"] = result.reason
             out["extraction"] = {"model": result.model, "tokens": result.tokens}
+        elif meal_read is not None:
+            out["skip_reason"] = result.reason
+            out["extraction"] = {"model": result.model, "tokens": result.tokens}
+            out["meal"] = meal_read
         else:
             out["skip_reason" if result.status == "skipped" else "review_reason"] = result.reason
             out["extraction"] = {"model": result.model, "tokens": result.tokens}
@@ -148,6 +159,8 @@ async def run_read_receipt(
     # Enqueue only after the commit above so commit_event always sees status='parsed'.
     if result.status == "parsed" and enqueuer is not None:
         await enqueuer.enqueue_job("commit_event", event_id)
+    if meal_read is not None and enqueuer is not None:
+        await enqueuer.enqueue_job("meal_event", event_id)
     if reply_id is not None:
         await send_and_record(sm, notifier, reply_id, reply)
     return result.status

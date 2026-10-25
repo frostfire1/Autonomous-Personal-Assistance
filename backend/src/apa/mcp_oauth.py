@@ -123,7 +123,7 @@ async def _run(p: Pending, sm: async_sessionmaker) -> "mcp_client.ServerCfg":
 
     async def callback():
         d = await asyncio.wait_for(p.code, PENDING_TTL_S)
-        return AuthorizationCodeResult(code=d["code"], state=d.get("state"))
+        return AuthorizationCodeResult(code=d["code"], state=d.get("state"), iss=d.get("iss"))  # the server's own name, checked by the SDK
 
     auth = provider(p.url, p.storage, redirect, callback)
     async with httpx2.AsyncClient(auth=auth, timeout=mcp_client.CALL_TIMEOUT_S) as http:
@@ -134,6 +134,13 @@ async def _run(p: Pending, sm: async_sessionmaker) -> "mcp_client.ServerCfg":
                              tools=[mcp_client._summary(t) for t in tools.tools][:60], refreshed_at=time.time())
     await mcp_client.save([x for x in servers if x.id != c.id] + [c], sm)
     return c
+
+
+def why(exc: BaseException) -> str:
+    """The reason inside an exception group (the SDK nests its errors), in a few words the owner can read."""
+    while isinstance(exc, BaseExceptionGroup) and exc.exceptions:
+        exc = exc.exceptions[0]
+    return f"{type(exc).__name__}: {str(exc)[:160]}" if str(exc) else type(exc).__name__
 
 
 def _sweep() -> None:
@@ -169,7 +176,7 @@ async def start(sm: async_sessionmaker, name: str, url: str) -> dict[str, Any]:
         try:
             return {"server": mcp_client.public(p.task.result())}
         except Exception as exc:
-            raise mcp_client.McpError(f"Could not connect ({type(exc).__name__}). Check the address.") from exc
+            raise mcp_client.McpError(f"Could not connect: {why(exc)}. Check the address.") from exc
     p.task.cancel()
     _pending.pop(p.id, None)
     raise mcp_client.McpError("The server did not answer in time.")
@@ -189,10 +196,10 @@ async def finish(pending_id: str, redirected_url: str) -> "mcp_client.ServerCfg"
     if not code:
         raise mcp_client.McpError("That address has no code: copy the whole address the browser ended on, it starts with " + REDIRECT)
     if not p.code.done():
-        p.code.set_result({"code": code, "state": (q.get("state") or [None])[0]})
+        p.code.set_result({"code": code, "state": (q.get("state") or [None])[0], "iss": (q.get("iss") or [None])[0]})
     try:
         return await asyncio.wait_for(p.task, mcp_client.CALL_TIMEOUT_S + 10)
     except Exception as exc:
-        raise mcp_client.McpError(f"The sign-in did not complete ({type(exc).__name__}). Start again.") from exc
+        raise mcp_client.McpError(f"The sign-in did not complete: {why(exc)}. Start again.") from exc
     finally:
         _pending.pop(pending_id, None)

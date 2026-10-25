@@ -444,6 +444,31 @@ async def research_run(ctx: dict, topic: str) -> str:
     return "sent"
 
 
+async def meal_event(ctx: dict, event_id: int) -> str:
+    """A photo of food was read: the assistant takes it from there like a message from the owner (nutrition skill, estimates)."""
+    from sqlalchemy import select
+
+    from apa import meal
+    from apa.chat import agent
+    from apa.chat.assistant import converse
+
+    sm = ctx.get("sessionmaker", SessionLocal)
+    redis, notifier, llm = ctx.get("redis"), ctx.get("notifier"), ctx.get("llm")
+    async with sm() as s:
+        ev = (await s.execute(select(InboundEvent).where(InboundEvent.id == event_id))).scalar_one_or_none()
+    read = ev.payload.get("meal") if ev is not None else None
+    if not read or notifier is None:
+        return "nothing"
+    if redis is not None and not await redis.set(f"apa:meal:{event_id}", "1", nx=True, ex=86400):
+        return "already_done"
+    tz = ZoneInfo(get_settings().timezone)
+    text = meal.to_message(read, ev.payload.get("caption"))
+    reply, _ = await converse(sm, llm, redis, text, agent._history_block(await agent.load_history(redis)), tz, datetime.now(tz))
+    await notifier.send(reply)
+    await agent.remember(redis, "📷 (photo of food) " + ", ".join(d["name"] for d in read["dishes"])[:120], reply[:300])
+    return "sent"
+
+
 async def routine_run_now(ctx: dict, routine_id: str) -> str:
     """Run one routine once, right now (the dashboard's "Run now")."""
     from apa import routines
@@ -590,7 +615,7 @@ class WorkerSettings:
     max_tries = COMMIT_MAX_TRIES
     functions = [
         process_inbound_event, commit_event, extract_event, master_event, chat_event, reconcile_event,
-        read_receipt, release_quarantined, briefing_telegram, phone_watch, memory_digest, care_checkin, companion_chat, routine_tick, routine_run_now, func(research_run, timeout=1200, max_tries=1),
+        read_receipt, release_quarantined, briefing_telegram, phone_watch, memory_digest, care_checkin, companion_chat, routine_tick, routine_run_now, meal_event, func(research_run, timeout=1200, max_tries=1),
     ]
     cron_jobs = [
         cron(sheets_sync, second=0, run_at_startup=False),  # every 60 s
