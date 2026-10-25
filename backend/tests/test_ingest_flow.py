@@ -1113,19 +1113,58 @@ def test_the_mcp_login_keeps_its_tokens_and_refuses_an_address_without_a_code(mo
     get_settings.cache_clear()
 
 
-def test_a_food_photo_reading_is_validated_and_becomes_the_owners_message():
+def test_any_photo_reading_is_validated_and_becomes_the_owners_message():
     import json
 
-    from apa import meal
+    from apa import vision
 
-    good = json.dumps({"kind": "meal", "dishes": [{"name": "Nasi   goreng", "portion": "1 plate", "grams": 300}, {"name": "", "portion": "x"}, {"name": "teh", "grams": "lots"}],
-                       "note": "portion is a guess"})
-    read = meal.parse("```json\n" + good + "\n```")
-    assert read and [d["name"] for d in read["dishes"]] == ["Nasi goreng", "teh"] and read["dishes"][0]["grams"] == 300 and read["dishes"][1]["grams"] is None
-    for bad in ('{"kind": "other", "dishes": []}', '{"kind": "meal", "dishes": []}', '{"kind": "person", "dishes": [{"name": "x"}]}', "not json", "[]", ""):
-        assert meal.parse(bad) is None
-    text = meal.to_message(read, " makan siang ")
-    assert text.startswith("I just sent a photo of my meal (makan, meal). The picture shows: Nasi goreng (1 plate, about 300 g); teh.")
-    assert "Note about the photo: portion is a guess" in text and "My caption: «makan siang»" in text and text.endswith("what it roughly adds up to.")
-    drink = meal.to_message({"kind": "drink", "dishes": [{"name": "es teh", "portion": "300 ml", "grams": None}], "note": ""})
-    assert "a drink" in drink and "es teh (300 ml)" in drink and "My caption" not in drink
+    snack = json.dumps({"kind": "product", "title": "Makaroni Spiral", "summary": "A foil snack package held in a hand, brown and orange.",
+                        "text": "Makaroni Spiral. Tanggal kedaluwarsa 1 Mei 2027", "barcode": "2053 1745 2142 9", "dishes": [{"name": "makaroni spiral", "portion": "1 pack", "grams": 90}],
+                        "note": "the ingredients are too small to read"})
+    read = vision.parse("```json\n" + snack + "\n```")
+    assert read and read["kind"] == "product" and read["barcode"] == "2053174521429" and read["dishes"][0]["grams"] == 90
+    text = vision.to_message(read, " cemilan ")
+    assert text.startswith("I just sent you a photo (product: Makaroni Spiral). It shows: A foil snack package")
+    assert "Text on it: «Makaroni Spiral. Tanggal kedaluwarsa 1 Mei 2027»" in text and "Barcode: 2053174521429." in text and "(makan, meal)" in text
+    assert "My caption: «cemilan»" in text and "expiry" in text and "nutrition skill" in text
+    doc = vision.parse(json.dumps({"kind": "document", "title": "Invoice", "summary": "An electricity bill for October.", "dishes": [{"name": "x"}], "barcode": "123"}))
+    assert doc["dishes"] == [] and doc["barcode"] == "" and "Summarise it" in vision.to_message(doc)  # dishes only for food, a short number is not a barcode
+    person = vision.to_message(vision.parse(json.dumps({"kind": "person", "summary": "A person in a red shirt at a desk."})))
+    assert "do not say who anyone is" in person
+    for bad in ('{"kind": "banana", "summary": "x long enough"}', '{"kind": "meal", "summary": "x"}', "not json", "[]", ""):
+        assert vision.parse(bad) is None
+
+
+def test_recent_photos_become_context_and_a_reply_is_matched_to_its_photo():
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+
+    from apa import vision
+
+    tz = ZoneInfo("Asia/Jakarta")
+    at = datetime(2026, 3, 9, 16, 13, tzinfo=tz).timestamp()
+    items = [{"at": at, "message_id": 189, "uris": ["local:ab/x.jpg"], "kind": "product", "title": "Makaroni Spiral", "summary": "A snack package.", "text": "exp 1 Mei 2027"},
+             {"at": at - 600, "message_id": 150, "uris": [], "kind": "document", "title": "bill.csv", "summary": "A list.", "text": ""}]
+    block = vision.context_block(items, tz, reply_to=189)
+    assert "1. 16:13 product: Makaroni Spiral - A snack package. | text: exp 1 Mei 2027  <- the owner is replying to this one" in block
+    assert "2. 16:03 document: bill.csv" in block and block.count("replying") == 1 and vision.context_block([], tz) == ""
+
+
+def test_files_are_told_apart_and_read_and_a_statement_is_recognised():
+    import io
+
+    from pypdf import PdfWriter
+
+    from apa.ingestion import file_intake as fi
+
+    assert fi.kind_of("notes.MD", "") == "text" and fi.kind_of("x", "text/csv") == "text" and fi.kind_of("a.pdf", "") == "pdf" and fi.kind_of("a.zip", "application/zip") == "other"
+    assert fi.extract_text(b"halo, saldo: 100", "a.txt", "text/plain") == ("halo, saldo: 100", None)
+    blank = io.BytesIO()
+    w = PdfWriter()
+    w.add_blank_page(width=100, height=100)
+    w.write(blank)
+    text, problem = fi.extract_text(blank.getvalue(), "scan.pdf", "application/pdf")
+    assert text == "" and "scan" in problem  # no text layer: say so (the bot then treats a PDF like that as a statement, as before)
+    assert fi.extract_text(b"x", "a.zip", "application/zip")[1].startswith("Aku belum bisa membaca file jenis ini")
+    assert fi.looks_like_bank_statement("mutasi_oktober.pdf", "") and fi.looks_like_bank_statement("x.pdf", "Rekening Koran periode Oktober, saldo awal 1.000")
+    assert not fi.looks_like_bank_statement("tiket.pdf", "Your flight to Bali departs at 10:00")

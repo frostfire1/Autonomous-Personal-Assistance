@@ -148,25 +148,14 @@ async def answer(
     tokens = (routed.prompt_tokens or 0) + (routed.completion_tokens or 0)
     log.info("chat_routed", role=role, topic=topic)
 
-    if role in ("unavailable", "general"):  # no dead ends: the assistant talks about anything and can look things up
+    if role != "action":  # no finance-only side doors: the one assistant answers (it looks things up and uses its tools itself)
         from apa.chat.assistant import converse
 
         reply, t = await converse(sm, llm, redis, text, _history_block(history), tz, datetime.now(tz), reply_to=reply_to)
         return Answer(reply, "general", tokens + t)
 
-    if role == "action":
-        reply, t = await plan_action(sm, llm, text, history, tz, redis)
-        return Answer(reply, role, tokens + t)
-
-    if role in GROUNDED:
-        reply, t = await ask_agent(llm, role, text, await GROUNDED[role](sm, tz), history)
-        return Answer(reply, role, tokens + t)
-
-    system = f"You are the owner's friendly personal finance assistant. {ANSWER_RULES} {CAPABILITIES}"
-    user = f"Recent chat:\n{_history_block(history)}\n\nUSER: {text}"
-    res = await llm.complete(ROUTINE, system, user, max_tokens=350, temperature=0.3)
-    tokens += (res.prompt_tokens or 0) + (res.completion_tokens or 0)
-    return Answer(res.content.strip()[:MAX_REPLY] or CAPABILITIES, role, tokens)
+    reply, t = await plan_action(sm, llm, text, history, tz, redis)
+    return Answer(reply, role, tokens + t)
 
 
 async def ask_agent(llm: LLMClient, role: str, text: str, facts: str, history: list[dict], custom: dict | None = None) -> tuple[str, int]:

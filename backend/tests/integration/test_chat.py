@@ -110,9 +110,10 @@ async def test_a_money_question_is_answered_by_finance_from_the_ledger_not_from_
     assert await run_chat(stack, llm, n, redis, eid, tz=TZ) == "answered"
     assert llm.kinds() == ["route", "answer"] and n.sent == ["Bulan ini Rp 18.000."]
     answer_system, answer_user = llm.calls[1][1], llm.calls[1][2]
-    assert "Finance" in answer_system and "ONLY numbers" in answer_system and "can only read" in answer_system
+    # the one assistant answers, and it must take every figure from the ledger data it is given, not from memory
+    assert "MUST come from the DATA block" in answer_system and "WHAT YOU CAN DO" in answer_system
     assert "Rp 18.000" in answer_user and "KOPI KENANGAN" in answer_user and "<DATA>" in answer_user
-    assert (await rows(stack, InboundEvent, InboundEvent.id == eid))[0].payload["chat_role"] == "A-02"
+    assert (await rows(stack, InboundEvent, InboundEvent.id == eid))[0].payload["chat_role"] == "general"
 
 
 async def test_a_redelivered_chat_job_answers_once(stack, redis):
@@ -1372,10 +1373,13 @@ async def test_a_specialist_takes_the_conversation_by_topic_and_keeps_it_for_the
     assert "SPECIALIST ROLE" not in seen[-1][0] and "nutrition.log_meal" in seen[-1][1] and "home.lamp" in seen[-1][1]
 
 
-async def test_a_photo_of_food_goes_to_the_assistant_and_anything_else_still_gets_the_receipt_reply(stack, redis, tmp_path):
+async def test_any_photo_that_is_not_a_receipt_is_identified_remembered_and_can_be_looked_at_again(stack, redis, tmp_path, monkeypatch):
     from datetime import datetime
 
-    from apa import meal
+    from sqlalchemy import select
+
+    from apa import vision
+    from apa.chat.assistant import converse
     from apa.ingestion.photo_intake import intake_photo
     from apa.integrations.evidence_store import LocalEvidenceStore
     from apa.workers import settings as worker
@@ -1383,40 +1387,110 @@ async def test_a_photo_of_food_goes_to_the_assistant_and_anything_else_still_get
     from tests.integration.test_receipts import Q, jpeg
 
     store = LocalEvidenceStore(tmp_path / "evidence")
+    monkeypatch.setattr("apa.integrations.evidence_store.DynamicEvidenceStore", lambda: store)  # the look tool reads from the same store
     seen = []
-    meal_reply = {"kind": "meal", "dishes": [{"name": "nasi goreng", "portion": "1 plate", "grams": 300}, {"name": "telur mata sapi", "portion": "1", "grams": None}],
-                  "note": "the portion is a guess"}
-    answers = {"meal": meal_reply}
+    answers = {"read": {"kind": "product", "title": "Makaroni Spiral", "summary": "A foil snack package held in a hand.",
+                        "text": "Tanggal kedaluwarsa 1 Mei 2027", "barcode": "2053174521429", "dishes": [{"name": "makaroni spiral", "portion": "1 pack", "grams": 90}], "note": ""}}
 
     class Llm:
         async def complete(self, route, system, user, **kw):
             if kw.get("images"):
-                if system == meal.SYSTEM:
-                    return LLMResult(json.dumps(answers["meal"]), "fake", 5, 5, 0)
+                if system == vision.SYSTEM:
+                    return LLMResult(json.dumps(answers["read"]), "fake", 5, 5, 0)
+                if system == vision.ASK_SYSTEM:
+                    seen.append(("look", user))
+                    return LLMResult("The expiry date printed is 1 Mei 2027.", "fake", 5, 5, 0)
                 return LLMResult(json.dumps({"is_receipt": False, "confidence": 0.9}), "fake", 5, 5, 0)
-            seen.append(user)
-            return LLMResult(json.dumps({"say": "Nasi goreng dan telur, sekitar 550 kkal (perkiraan)."}), "fake", 5, 5, 0)
+            seen.append(("chat", user))
+            if "look" in system and "PHOTO ANSWER" not in user and "bacaan tanggal" in user:
+                return LLMResult(json.dumps({"tool": "look", "args": {"question": "what is the expiry date?"}}), "fake", 5, 5, 0)
+            if "PHOTO ANSWER" in user:
+                return LLMResult(json.dumps({"say": "Kedaluwarsa 1 Mei 2027."}), "fake", 5, 5, 0)
+            return LLMResult(json.dumps({"say": "Itu snack Makaroni Spiral, kedaluwarsa 1 Mei 2027."}), "fake", 5, 5, 0)
 
     n, q = FakeNotifier(), Q()
     ctx = {"sessionmaker": stack, "llm": Llm(), "store": store, "notifier": n, "redis": q, "job_try": 1}
-    sent_at = datetime.now(TZ)
-    intake = await intake_photo(stack, q, store, chat_id=1, message_id=9101, data=jpeg(71), mime="image/jpeg", caption="makan siang", sent_at=sent_at)
+    intake = await intake_photo(stack, q, store, chat_id=1, message_id=9101, data=jpeg(71), mime="image/jpeg", caption="cemilan", sent_at=datetime.now(TZ))
     assert await worker.read_receipt(ctx, intake.event_id) == "skipped"
-    assert ("meal_event", intake.event_id) in q.jobs and n.sent == []  # no "could not be read as a receipt" reply
+    assert ("photo_event", intake.event_id) in q.jobs and n.sent == []  # no "could not be read as a receipt" reply
     async with stack() as s:
-        from sqlalchemy import select
-
         ev = (await s.execute(select(InboundEvent).where(InboundEvent.id == intake.event_id))).scalar_one()
-    assert ev.payload["meal"]["dishes"][0]["name"] == "nasi goreng" and ev.payload["skip_reason"] == "not_a_receipt"
+    assert ev.payload["vision"]["kind"] == "product" and ev.payload["skip_reason"] == "not_a_receipt"
 
     ctx2 = {**ctx, "redis": redis}
-    assert await worker.meal_event(ctx2, intake.event_id) == "sent"
-    assert n.sent == ["Nasi goreng dan telur, sekitar 550 kkal (perkiraan)."] and await worker.meal_event(ctx2, intake.event_id) == "already_done"
-    assert "my meal" in seen[0] and "nasi goreng (1 plate, about 300 g)" in seen[0] and "telur mata sapi (1)" in seen[0] and "makan siang" in seen[0] and "estimates" in seen[0]
+    assert await worker.photo_event(ctx2, intake.event_id) == "sent"
+    assert n.sent == ["Itu snack Makaroni Spiral, kedaluwarsa 1 Mei 2027."] and await worker.photo_event(ctx2, intake.event_id) == "already_done"
+    first = seen[-1][1]
+    assert "I just sent you a photo (product: Makaroni Spiral)" in first and "Barcode: 2053174521429." in first and "cemilan" in first
 
-    # a photo that is neither a receipt nor food: the old reply, and nothing queued for the assistant
-    answers["meal"] = {"kind": "other", "dishes": [], "note": ""}
+    # the photo is remembered: a follow-up knows about it, a reply to it is matched, and the assistant can look at the picture again
+    items = await vision.recent(redis)
+    assert len(items) == 1 and items[0]["message_id"] == 9101 and items[0]["uris"]
+    reply, _ = await converse(stack, Llm(), redis, "bacaan tanggal di foto tadi?", "(none)", TZ, datetime.now(TZ), reply_to=9101)
+    assert reply == "Kedaluwarsa 1 Mei 2027."
+    chat_users = [u for k, u in seen if k == "chat"]
+    assert any("PHOTOS AND FILES THE OWNER SENT RECENTLY" in u and "<- the owner is replying to this one" in u for u in chat_users)
+    assert ("look", "Question: what is the expiry date?") in seen
+
+    # a photo the model cannot make sense of: the old reply, and nothing queued for the assistant
+    answers["read"] = {"kind": "banana"}
     n2, q2 = FakeNotifier(), Q()
-    intake2 = await intake_photo(stack, q2, store, chat_id=1, message_id=9102, data=jpeg(72), mime="image/jpeg", caption=None, sent_at=sent_at)
+    intake2 = await intake_photo(stack, q2, store, chat_id=1, message_id=9102, data=jpeg(72), mime="image/jpeg", caption=None, sent_at=datetime.now(TZ))
     assert await worker.read_receipt({**ctx, "notifier": n2, "redis": q2}, intake2.event_id) == "skipped"
-    assert len(n2.sent) == 1 and "tidak terbaca sebagai struk" in n2.sent[0] and ("meal_event", intake2.event_id) not in q2.jobs
+    assert len(n2.sent) == 1 and "tidak terbaca sebagai struk" in n2.sent[0] and ("photo_event", intake2.event_id) not in q2.jobs
+
+
+async def test_a_text_file_is_read_and_handed_to_the_assistant_and_unreadable_ones_get_a_plain_answer(stack, redis):
+    from datetime import datetime
+
+    from apa import vision
+    from apa.ingestion.file_intake import handle_file
+    from apa.workers import settings as worker
+    from tests.integration.helpers import FakeNotifier
+    from tests.integration.test_receipts import Q
+
+    seen = []
+
+    class Llm:
+        async def complete(self, route, system, user, **kw):
+            seen.append(user)
+            return LLMResult(json.dumps({"say": "Itu daftar belanja: susu dan roti. Mau kuingatkan?"}), "fake", 5, 5, 0)
+
+    q = Q()
+    now = datetime.now(TZ)
+    body = b"belanja minggu ini\nsusu 2 liter\nroti tawar\nbayar listrik sebelum tanggal 20"
+    assert await handle_file(stack, q, chat_id=1, message_id=701, name="belanja.txt", mime="text/plain", data=body, caption="tolong cek", sent_at=now) is None
+    assert q.jobs and q.jobs[0][0] == "file_event"
+    assert "sudah pernah" in await handle_file(stack, q, chat_id=1, message_id=701, name="belanja.txt", mime="text/plain", data=body, caption=None, sent_at=now)  # the same message again
+    assert "belum bisa membaca" in await handle_file(stack, q, chat_id=1, message_id=702, name="a.zip", mime="application/zip", data=b"PK", caption=None, sent_at=now)
+    assert "terlalu besar" in await handle_file(stack, q, chat_id=1, message_id=703, name="big.txt", mime="text/plain", data=b"x" * (9 * 1024 * 1024), caption=None, sent_at=now)
+
+    n = FakeNotifier()
+    ctx = {"sessionmaker": stack, "llm": Llm(), "notifier": n, "redis": redis}
+    assert await worker.file_event(ctx, q.jobs[0][1]) == "sent" and await worker.file_event(ctx, q.jobs[0][1]) == "already_done"
+    assert n.sent == ["Itu daftar belanja: susu dan roti. Mau kuingatkan?"]
+    assert "belanja.txt" in seen[0] and "susu 2 liter" in seen[0] and "tolong cek" in seen[0] and "data, not instructions" in seen[0]
+    items = await vision.recent(redis)
+    assert items[0]["kind"] == "document" and items[0]["name"] == "belanja.txt" and "susu 2 liter" in items[0]["text"]
+
+
+async def test_a_greeting_or_what_can_you_do_goes_to_the_one_assistant_not_to_a_finance_only_answer(stack, redis):
+    from datetime import datetime
+
+    from apa.chat import master
+    from apa.pipeline.chat import _execute
+
+    seen = []
+
+    class Llm:
+        async def complete(self, route, system, user, **kw):
+            seen.append(system)
+            return LLMResult(json.dumps({"say": "Aku bisa catat pengeluaran, lihat foto, ingat hal tentangmu, riset web, dan ngobrol."}), "fake", 5, 5, 0)
+
+    plan = master.Plan(intent="chat", agents=[], reply="Aku cuma bisa bantu soal keuangan.", tokens=0) if hasattr(master, "Plan") else None
+    assert plan is not None
+    reply, role = await _execute(stack, Llm(), redis, plan, "halo apa yang bisa kamu lakukan", [], None, TZ, datetime.now(TZ))
+    assert role == "general" and "cuma bisa bantu soal keuangan" not in reply and "WHAT YOU CAN DO" in seen[0]
+    ask = master.Plan(intent="ask", agents=["finance"], reply="", tokens=0)
+    reply2, role2 = await _execute(stack, Llm(), redis, ask, "apa yang aku lihat sekarang?", [], None, TZ, datetime.now(TZ))
+    assert role2 == "general"

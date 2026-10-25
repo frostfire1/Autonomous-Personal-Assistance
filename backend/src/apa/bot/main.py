@@ -168,25 +168,47 @@ async def button(cb: CallbackQuery, arq: ArqRedis) -> None:
 async def document_entry(
     message: Message, bot: Bot, arq: ArqRedis, store: EvidenceStore, private: PrivateManager
 ) -> None:
-    """A PDF is a bank statement: reconcile it against the ledger. Nothing else sent as a file is read."""
-    doc = message.document
-    if private.active(message.chat.id) or doc is None or doc.mime_type != "application/pdf":
-        return
-    if doc.file_size and doc.file_size > 15 * 1024 * 1024:
-        await message.answer("File mutasi terlalu besar (batas 15 MB).")
-        return
+    """A file. A PDF that is a bank statement is reconciled against the ledger; an image goes the photo way (tried as a receipt, else
+    identified); text, CSV, JSON and any other PDF are read and handed to the assistant."""
     import io
 
+    from apa.ingestion.file_intake import extract_text, handle_file, looks_like_bank_statement
+    from apa.ingestion.photo_intake import intake_photo
+
+    doc = message.document
+    if private.active(message.chat.id) or doc is None:
+        return
+    mime = doc.mime_type or ""
+    if doc.file_size and doc.file_size > 15 * 1024 * 1024:
+        await message.answer("File terlalu besar (batas 15 MB).")
+        return
     buf = io.BytesIO()
     await bot.download(doc, destination=buf)
-    result = await intake_statement(
-        SessionLocal, arq, store, chat_id=message.chat.id, message_id=message.message_id, data=buf.getvalue(),
-        mime="application/pdf", caption=message.caption, sent_at=message.date,
-    )
-    if result.startswith("rejected"):
-        await message.answer(f"Mutasi tidak bisa diproses: {result.removeprefix('rejected: ')}")
-    elif result == "duplicate":
-        await message.answer("Mutasi ini sudah pernah dikirim.")
+    data = buf.getvalue()
+    if mime in ("image/jpeg", "image/png", "image/webp"):
+        res = await intake_photo(SessionLocal, arq, store, chat_id=message.chat.id, message_id=message.message_id, data=data, mime=mime,
+                                 caption=message.caption, sent_at=message.date, media_group_id=getattr(message, "media_group_id", None))
+        if res.status == "duplicate":
+            await message.answer("Foto itu sudah pernah dikirim.")
+        elif res.status in ("rejected", "too_many"):
+            await message.answer(f"Foto tidak bisa diproses: {res.detail}")
+        return
+    text, unreadable = extract_text(data, doc.file_name or "", mime) if mime == "application/pdf" else ("", None)
+    # a PDF is a bank statement when its caption, name or text says so, and also when it has no readable text (a scan): as it was before files were read
+    if mime == "application/pdf" and (looks_like_statement(message.caption) or unreadable or looks_like_bank_statement(doc.file_name or "", text)):
+        result = await intake_statement(
+            SessionLocal, arq, store, chat_id=message.chat.id, message_id=message.message_id, data=data,
+            mime="application/pdf", caption=message.caption, sent_at=message.date,
+        )
+        if result.startswith("rejected"):
+            await message.answer(f"Mutasi tidak bisa diproses: {result.removeprefix('rejected: ')}")
+        elif result == "duplicate":
+            await message.answer("Mutasi ini sudah pernah dikirim.")
+        return
+    reply = await handle_file(SessionLocal, arq, chat_id=message.chat.id, message_id=message.message_id, name=doc.file_name or "file", mime=mime,
+                              data=data, caption=message.caption, sent_at=message.date)
+    if reply:
+        await message.answer(reply)
 
 
 @dp.message(F.func(_owner_only), F.photo)

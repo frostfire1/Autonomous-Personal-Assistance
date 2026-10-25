@@ -69,7 +69,8 @@ backend_env() {
   [ "$S3_MODE" = local ] && ev=local
   ENVARGS=(--env-file .env -e TZ="$TZV" -e DATABASE_URL="$APP_URL" -e REDIS_URL="$redis"
     -e LITELLM_BASE_URL="$llm" -e LITELLM_MASTER_KEY="$key" -e EVIDENCE_BACKEND="$ev")
-  [ "$S3_MODE" = local ] && ENVARGS+=(-e EVIDENCE_DIR=/data/evidence -v apa-evidence:/data/evidence)
+  # photos always have a place on this disk too: the store itself when S3_MODE=local, the fallback when the S3 store refuses one
+  ENVARGS+=(-e EVIDENCE_DIR=/data/evidence -v apa-evidence:/data/evidence)
   [ "${RESEARCH_MODE:-off}" = bundled ] && ENVARGS+=(-e RESEARCH_URL=http://gptr:8000)
   return 0
 }

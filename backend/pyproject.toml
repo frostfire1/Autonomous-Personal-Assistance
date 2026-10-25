@@ -31,6 +31,7 @@ dependencies = [
 voice = ["faster-whisper>=1.1"]
 research = ["trafilatura>=2.0"]
 mcp = ["mcp>=2,<3"]
+docs = ["pypdf>=5"]
 dev = ["pytest>=8", "pytest-asyncio>=0.24", "ruff>=0.8", "mypy>=1.13", "pyyaml>=6"]
 
 [build-system]
@@ -83,7 +84,9 @@ ignore = ["B008"]  # FastAPI Depends() in defaults is the framework idiom
 "src/apa/mcp_client.py" = ["E501"]
 "src/apa/mcp_oauth.py" = ["E501"]
 "src/apa/routines.py" = ["E501"]
-"src/apa/meal.py" = ["E501"]
+"src/apa/vision.py" = ["E501"]
+"src/apa/integrations/evidence_store.py" = ["E501"]
+"src/apa/ingestion/file_intake.py" = ["E501"]
 "src/apa/natural.py" = ["E501"]
 "src/apa/integrations/notify.py" = ["E501"]
 "src/apa/companion.py" = ["E501"]

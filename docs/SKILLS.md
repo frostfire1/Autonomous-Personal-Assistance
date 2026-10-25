@@ -40,8 +40,14 @@ The main assistant (the master) knows every skill. For a domain that deserves it
 assistant switches to that role and sees only that server's tools; a follow-up without a keyword ("tambah nasi putih") stays with it for 20 minutes.
 Everything else goes to the master with all the skills.
 
-Meal photos: send a photo of food to the bot (it is tried as a receipt first; if it is food, it goes on). An MCP tool takes text, numbers or links, not a photo: the assistant's own vision model (the same one that reads
-receipts) names the dishes and rough portions, the assistant takes that as your message, estimates the nutrition and logs it with the nutrition tools (you confirm the log with a tap unless you allowed that tool). A photo that is neither a receipt nor food gets the usual reply. What a server sends back may contain images; only text is shown for now.
+Photos and files: send the bot a photo or a file and it answers like to a message. A receipt goes to the ledger as before. Anything else is read by the
+vision model (the same one that reads receipts): what it is (a meal, a drink, a packaged product, a document, a screenshot, a person, a place, an
+object), what it shows, the text printed on it (names, dates such as an expiry date), a barcode if it can be read, and for food the dishes with rough
+portions. The assistant takes that as your message: food and products go to the nutrition tools when a nutrition server is connected (estimates, logged
+after your tap), a document is summarised, a screenshot explained. It never says who a person is. What you sent is remembered for six hours, so "look at
+the photo", "this" or a reply to the photo work, and the assistant can look at the picture again with a specific question ("what is the expiry date?").
+Files: text, CSV, JSON and PDFs with a text layer are read and handed to the assistant; a PDF that is a bank statement is reconciled against the ledger as
+before (and so is a PDF that cannot be read, for example a scan). An MCP tool itself takes text, numbers or links, not a photo.
 
 ### Routines: schedules and automations (the Routines page, or ask in chat)
 

@@ -3,6 +3,6 @@ ENV PYTHONUNBUFFERED=1 PIP_NO_CACHE_DIR=1
 WORKDIR /app
 COPY pyproject.toml ./
 COPY src ./src
-RUN pip install ".[voice,research,mcp]"
+RUN pip install ".[voice,research,mcp,docs]"
 COPY alembic.ini ./
 COPY alembic ./alembic

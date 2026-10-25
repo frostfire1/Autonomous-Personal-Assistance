@@ -264,7 +264,7 @@ async def _execute(
         return await batch_flow.start(sm, redis, items, tz), "batch"
     if p.intent == "draft_edit":
         return await batch_flow.edit_with_model(sm, redis, llm, draft, text, tz), "draft_edit"
-    if p.intent == "ask":
+    if p.intent == "ask" and custom and any(r in custom for r in p.agents):  # an agent the owner made keeps its own narrow data and manners
         facts = await finance_snapshot(sm, tz)  # computed once, shared by every agent asked
         async def facts_for(role: str) -> str:
             if custom and role in custom:  # a custom agent reads only the data sets its owner gave it
@@ -280,7 +280,6 @@ async def _execute(
     if p.intent == "action":
         reply, _ = await plan_action(sm, llm, text, history, tz, redis)
         return reply, "action"
-    if p.intent == "unavailable" or (p.intent == "chat" and not p.reply):
-        reply, _ = await converse(sm, llm, redis, text, _history_block(history), tz, datetime.now(tz), reply_to=reply_to)
-        return reply, "general"  # no dead ends: the assistant answers, looks things up, or asks what the owner means
-    return p.reply or CAPABILITIES, "chat"
+    # everything else, a question, a greeting or "what can you do": the one assistant answers, with its look-ups, memory and skills
+    reply, _ = await converse(sm, llm, redis, text, _history_block(history), tz, datetime.now(tz), reply_to=reply_to)
+    return reply, "general"

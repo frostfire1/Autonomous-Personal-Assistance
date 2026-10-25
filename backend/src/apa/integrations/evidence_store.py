@@ -163,7 +163,16 @@ class DynamicEvidenceStore:
         return self._built[key]
 
     async def put(self, data: bytes, mime: str) -> StoredFile:
-        return await (await self._for()).put(data, mime)
+        try:
+            return await (await self._for()).put(data, mime)
+        except EvidenceError:
+            raise  # an unusable upload (empty, too large, wrong type) is the caller's to report
+        except Exception as exc:  # the S3 store is down, refuses the key or the network is cut: keep the photo on this server's disk instead
+            from apa.core.logging import get_logger
+
+            get_logger(__name__).warning("evidence_store_fallback", error=type(exc).__name__, detail=str(exc)[:160])
+            eff = (self._base or get_settings())
+            return await LocalEvidenceStore(eff.evidence_dir, eff.max_image_bytes).put(data, mime)
 
     async def get(self, uri: str) -> bytes:
         return await (await self._for(s3=not uri.startswith("local:"))).get(uri)

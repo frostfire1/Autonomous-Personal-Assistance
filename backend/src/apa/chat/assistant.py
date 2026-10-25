@@ -43,6 +43,7 @@ MEMORY_TOOL_DOC = """Memory tools (they take effect at once; then answer):
 - routine_add {"name": string, "kind": "remind"|"ask"|"tool", "at": "HH:MM" (24 h, the owner's time) or "every_min": 15+, "days": [0-6]? (0=Mon; empty = every day), "text": string (the reminder, or the task for you), "server"+"tool"+"arguments" (kind tool: one skill, run on its own at that time)}
   create a scheduled routine when the owner asks for a reminder, a recurring task or an automation ("remind me to log lunch at 12:30 every day"). The owner sees a card and must confirm.
 - routine_delete {"name": string}  remove a routine (also a card)
+- look {"question": string, "n": number? (which of the PHOTOS AND FILES list, 1 = newest)}  look at a photo the owner sent again and answer a specific question about it (read the ingredients, a date, a number, what is written)
 - gif {"query": string}  find a GIF for a few plain words ("celebrate", "cat sleepy"). Use it rarely, only when it truly fits the moment
   (a celebration, a joke, comfort) and the owner's style is playful; never on money losses, health, security or other serious topics.
   The result tells you the marker to add at the end of your reply."""
@@ -61,6 +62,11 @@ SYSTEM = (
     "You know the owner like a close friend: when it helps, use WHAT YOUR DATA SAYS (their sleep, when they are active, what they "
     "eat and when, spending, steps, interests) to give practical, caring advice, quoting the figure it rests on; if a trait is "
     "missing or thin, say you do not have enough data yet rather than guessing. Suggest, never lecture; one or two ideas at most.\n"
+    "WHAT YOU CAN DO (say it plainly when asked, in the owner's style, a few items, never a menu of everything): record, edit and undo payments and "
+    "answer about their money (always with a confirmation card for changes); look at photos and files they send (receipts go to the ledger, food and "
+    "products to nutrition, documents get summarised, screenshots explained); remember what they tell you and write their diary by itself; know what "
+    "they used, watched and listened to lately; research the web with links; set reminders and scheduled routines; use the skills (MCP servers) they "
+    "connected, such as a nutrition tracker or smart home; and just talk. If you cannot do something, say so and suggest the nearest thing you can do.\n"
     "You are one personal companion in a single chat, like a person who knows them, not a menu or a form: answer in their style "
     "(see HOW TO WRITE TO THE OWNER), use what you know about their hobbies and taste naturally (a game they play, a channel "
     "they follow) and never recite statistics. Be aware of the time of day and of their wellbeing: when it fits, ask about food, "
@@ -153,7 +159,10 @@ async def converse(
     spec = await mcp_client.pick_specialist(await mcp_client.current(sm), redis, text)  # a specialist skill agent may take the conversation
     system = SYSTEM + (f"\n\nSPECIALIST ROLE ({spec.name}): {spec.role}\nYou are in charge of this conversation until the owner changes the topic." if spec and spec.role else "")
     only = {"only_skill": spec.id} if spec else {}
-    transcript = [await _context(sm, tz, now, history_block, reply_to, **only), f"OWNER: {text}"]
+    from apa import vision
+
+    photos = vision.context_block(await vision.recent(redis), tz, reply_to)  # what they sent lately, so "look at the photo" and replies to it make sense
+    transcript = [await _context(sm, tz, now, history_block, reply_to, **only), f"{photos}OWNER: {text}"]
     tokens = 0
     for step in range(MAX_STEPS + 1):
         final = step == MAX_STEPS  # out of look-ups: the next answer must be words
@@ -172,6 +181,25 @@ async def converse(
             result = await run_read(sm, tz, now, name, args)
             log.info("assistant_lookup", tool=name)
             transcript += [f"TOOL {name} {json.dumps(args, ensure_ascii=False)[:200]}", f"RESULT:\n{result}"]
+            continue
+        if name == "look" and not final:
+            from apa import vision
+            from apa.integrations.evidence_store import DynamicEvidenceStore
+
+            items = await vision.recent(redis)
+            n = args.get("n") if isinstance(args.get("n"), int) else 1
+            item = items[n - 1] if 1 <= n <= len(items) else None
+            if item is None:
+                result = "No recent photo or file is remembered (they are kept for six hours)."
+            elif not item.get("uris"):
+                result = f"FILE «{item.get('name') or item.get('title')}» content (untrusted): {item.get('text', '')[:3000]}"
+            else:
+                try:
+                    result = "PHOTO ANSWER (untrusted): " + await vision.ask(llm, DynamicEvidenceStore(), item["uris"], str(args.get("question", ""))[:300])
+                except Exception as exc:
+                    log.warning("look_failed", error=type(exc).__name__)
+                    result = "The photo could not be looked at again right now."
+            transcript += [f"TOOL look {json.dumps(args, ensure_ascii=False)[:160]}", f"RESULT:\n{result}"]
             continue
         if name in ("routine_add", "routine_delete") and not final:
             return (await actions.propose_internal(sm, redis, name, args if isinstance(args, dict) else {}))[:MAX_REPLY], tokens
