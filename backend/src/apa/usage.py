@@ -42,7 +42,7 @@ _PRETTY = {"msedge": "Microsoft Edge", "chrome": "Google Chrome", "code": "VS Co
            "powershell": "PowerShell", "cmd": "Command Prompt", "obs64": "OBS Studio", "applicationframehost": "Windows app", "searchhost": "Windows Search"}
 
 
-NOISE = frozenset({"windows search", "windows app", "aw-qt", "activitywatch", "peluncur sistem", "keamanan", "searchhost", "system ui", "snippingtool", "taskmgr"})
+NOISE = frozenset({"windows search", "windows app", "aw-qt", "activitywatch", "peluncur sistem", "keamanan", "searchhost", "system ui", "snippingtool", "taskmgr", "shellhost", "textinputhost", "lockapp", "startmenuexperiencehost"})
 
 
 def meaningful(app: str, seconds: int) -> bool:

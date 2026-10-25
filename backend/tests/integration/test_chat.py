@@ -1177,7 +1177,7 @@ async def test_skills_from_an_mcp_server_run_when_read_only_or_allowed_and_other
             yield client
 
     monkeypatch.setattr(mcp_client, "connect", fake_connect)
-    monkeypatch.setenv("MCP_CALLS_PER_DAY", "5")
+    monkeypatch.setenv("MCP_CALLS_PER_DAY", "3")
     get_settings.cache_clear()
     mcp_client._cache = None
 
@@ -1208,7 +1208,7 @@ async def test_skills_from_an_mcp_server_run_when_read_only_or_allowed_and_other
     assert (await mcp_client.invoke(stack, redis, {"server": "notes", "tool": "lookup", "arguments": {"q": "z"}}))[0] == "error"
     assert await mcp_client.set_policy(stack, "notes", None, enabled=True)
     mcp_client._cache = None
-    assert (await mcp_client.invoke(stack, redis, {"server": "notes", "tool": "lookup", "arguments": {"q": "y"}}))[0] == "error"  # the daily limit of 5 is reached
+    assert (await mcp_client.invoke(stack, redis, {"server": "notes", "tool": "lookup", "arguments": {"q": "y"}}))[0] == "error"  # the daily limit of 3 calls (lookup, card, allowed write) is reached
 
     # the assistant sees the skills and uses them in a conversation
     monkeypatch.setenv("MCP_CALLS_PER_DAY", "50")
