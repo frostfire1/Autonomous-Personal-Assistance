@@ -38,11 +38,24 @@ def category(app: str) -> str:
     return "other"
 
 
+_PRETTY = {"msedge": "Microsoft Edge", "chrome": "Google Chrome", "code": "VS Code", "windowsterminal": "Windows Terminal", "explorer": "File Explorer",
+           "powershell": "PowerShell", "cmd": "Command Prompt", "obs64": "OBS Studio", "applicationframehost": "Windows app", "searchhost": "Windows Search"}
+
+
+def pretty(app: str) -> str:
+    """A Windows process name read as an app name: 'msedge.exe' -> 'Microsoft Edge', 'discord.exe' -> 'Discord'."""
+    name = " ".join(app.split())
+    if name.lower().endswith(".exe"):
+        base = name[:-4]
+        return _PRETTY.get(base.lower(), base[:1].upper() + base[1:])
+    return name
+
+
 async def store(sm: async_sessionmaker, device: str, kind: str, day: date, apps: list[dict[str, Any]]) -> int:
     """Replace what one device reported for one day. -> number of apps kept. Apps are merged by name."""
     merged: dict[str, dict] = {}
     for a in apps[:MAX_APPS]:
-        name = " ".join(str(a["app"]).split())[:120]
+        name = pretty(str(a["app"]))[:120]
         if not name or int(a["seconds"]) <= 0:
             continue
         m = merged.setdefault(name, {"seconds": 0, "first_at": None, "last_at": None})

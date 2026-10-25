@@ -955,3 +955,10 @@ def test_the_day_reply_carries_a_first_person_diary_entry():
     out = daily.parse_day('{"headline": "A quiet day of games", "diary": "Hari ini aku main game seharian dan makan sate malamnya.", "mood": 4}')
     assert out and out["diary"].startswith("Hari ini aku main game") and out["mood"] == 4
     assert daily.parse_day('{"headline": "A quiet day"}')["diary"] == ""
+
+
+def test_windows_process_names_become_app_names():
+    from apa import usage
+
+    assert usage.pretty("msedge.exe") == "Microsoft Edge" and usage.pretty("discord.exe") == "Discord" and usage.pretty("Mobile Legends") == "Mobile Legends"
+    assert usage.pretty("claude.EXE") == "Claude" and usage.category(usage.pretty("discord.exe")) == "messaging"
