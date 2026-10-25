@@ -444,6 +444,31 @@ async def research_run(ctx: dict, topic: str) -> str:
     return "sent"
 
 
+async def routine_run_now(ctx: dict, routine_id: str) -> str:
+    """Run one routine once, right now (the dashboard's "Run now")."""
+    from apa import routines
+
+    tz = ZoneInfo(get_settings().timezone)
+    for r in await routines.load(ctx.get("sessionmaker", SessionLocal)):
+        if r.id == routine_id:
+            return await routines.execute(ctx, r, datetime.now(tz), tz)
+    return "missing"
+
+
+async def routine_tick(ctx: dict) -> str:
+    """Run the routines that are due this minute (see apa.routines)."""
+    from apa import routines
+
+    if ctx.get("notifier") is None:
+        return "no_notifier"
+    try:
+        ran = await routines.tick(ctx)
+    except Exception as exc:
+        log.warning("routine_tick_failed", error=type(exc).__name__)
+        return "failed"
+    return ",".join(ran) or "none"
+
+
 async def memory_digest(ctx: dict) -> str:
     """Each night the assistant writes the day's diary entry from the day's chat (nothing when there was little to say)."""
     from apa import assistant_memory
@@ -565,12 +590,13 @@ class WorkerSettings:
     max_tries = COMMIT_MAX_TRIES
     functions = [
         process_inbound_event, commit_event, extract_event, master_event, chat_event, reconcile_event,
-        read_receipt, release_quarantined, briefing_telegram, phone_watch, memory_digest, care_checkin, companion_chat, func(research_run, timeout=1200, max_tries=1),
+        read_receipt, release_quarantined, briefing_telegram, phone_watch, memory_digest, care_checkin, companion_chat, routine_tick, routine_run_now, func(research_run, timeout=1200, max_tries=1),
     ]
     cron_jobs = [
         cron(sheets_sync, second=0, run_at_startup=False),  # every 60 s
         cron(phone_watch, minute={5, 35}, run_at_startup=False),
         cron(memory_digest, hour=23, minute=55, run_at_startup=False),
+        cron(routine_tick, second=20, run_at_startup=False),
         cron(care_checkin, hour={9, 11, 14, 16, 19}, minute=20, run_at_startup=False),
         cron(companion_chat, hour={9, 13, 20}, minute=45, run_at_startup=False),
         cron(steward_tick, minute={3, 13, 23, 33, 43, 53}, run_at_startup=False),  # every 10 min

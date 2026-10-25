@@ -109,7 +109,26 @@ class McpCall(_Args):
     arguments: dict = Field(default_factory=dict)
 
 
-INTERNAL_TOOLS: dict[str, type[_Args]] = {"record_batch": RecordBatch, "mcp_call": McpCall}  # built by code, confirmed by the owner
+class RoutineAdd(_Args):
+    """Internal: a routine (a scheduled reminder, task or skill call) the owner is asked to confirm."""
+
+    name: str = Field(min_length=1, max_length=60)
+    kind: str = Field(pattern="^(remind|ask|tool)$")
+    at: str = Field(default="", max_length=5)
+    days: list[int] = Field(default_factory=list, max_length=7)
+    every_min: int = Field(default=0, ge=0, le=1440)
+    text: str = Field(default="", max_length=400)
+    server: str = Field(default="", max_length=24)
+    tool: str = Field(default="", max_length=80)
+    arguments: dict = Field(default_factory=dict)
+    notify: str = Field(default="always", pattern="^(always|error)$")
+
+
+class RoutineDelete(_Args):
+    name: str = Field(min_length=1, max_length=60)
+
+
+INTERNAL_TOOLS: dict[str, type[_Args]] = {"record_batch": RecordBatch, "mcp_call": McpCall, "routine_add": RoutineAdd, "routine_delete": RoutineDelete}  # built by code, confirmed by the owner
 
 TOOL_SPEC = """Tools (reply with exactly one):
 - add_transaction {"amount": number (rupiah), "merchant": string, "direction": "out"|"in", "wallet": "cash_wallet"|"gopay"|"ovo"|"dana"|"bank_bca"|... (optional), "note": string (optional)}
@@ -170,6 +189,20 @@ async def describe(sm: async_sessionmaker, tool: str, a: _Args) -> str:
         return f"Catat {sign} baru: {a.merchant} · {rupiah(a.amount)} · dompet {a.wallet}" + (
             f" · «{a.note}»" if a.note else ""
         )
+    if isinstance(a, (RoutineAdd, RoutineDelete)):
+        from apa import mcp_client, routines
+
+        if isinstance(a, RoutineDelete):
+            return f"Hapus rutinitas «{a.name}»"
+        try:
+            r = routines.check(routines.Routine(id="x" + routines.slug(a.name)[:20] or "xx", **a.model_dump()))
+        except ValueError as e:
+            raise Refused(str(e).replace("1 validation error for Routine", "").strip()[:200]) from None
+        if r.kind == "tool":
+            c = next((x for x in await mcp_client.current(sm) if x.id == r.server and x.enabled), None)
+            if c is None or r.tool not in {t["name"] for t in c.tools} or r.tool in c.off:
+                raise Refused("Skill itu tidak tersedia. Pilih dari daftar skill yang tersambung.")
+        return routines.describe(r) + (" · berjalan sendiri tanpa bertanya" if r.kind == "tool" else "")
     if isinstance(a, McpCall):
         shown = json.dumps(a.arguments, ensure_ascii=False)
         return f"Jalankan skill «{a.server}/{a.tool}»" + (f" dengan: {shown[:220]}" if a.arguments else "")
@@ -464,7 +497,25 @@ async def _exec_mcp(sm, redis, a: McpCall, nonce: str, tz: ZoneInfo) -> str:
     return f"✅ Skill «{a.server}/{a.tool}» selesai:\n{text[:1500]}"
 
 
+async def _exec_routine_add(sm, redis, a: RoutineAdd, nonce: str, tz: ZoneInfo) -> str:
+    from apa import routines
+
+    try:
+        r = await routines.add(sm, **a.model_dump())
+    except ValueError as e:
+        return f"⚠️ {str(e)[:200]}"
+    return f"✅ Rutinitas «{r.name}» dibuat ({r.when()}). Kelola di dashboard (Routines)."
+
+
+async def _exec_routine_delete(sm, redis, a: RoutineDelete, nonce: str, tz: ZoneInfo) -> str:
+    from apa import routines
+
+    return f"✅ Rutinitas «{a.name}» dihapus." if await routines.remove(sm, a.name) else "Rutinitas itu tidak ditemukan."
+
+
 _EXEC = {
+    "routine_add": _exec_routine_add,
+    "routine_delete": _exec_routine_delete,
     "mcp_call": _exec_mcp,
     "record_batch": _exec_batch,
     "add_transaction": _exec_add,

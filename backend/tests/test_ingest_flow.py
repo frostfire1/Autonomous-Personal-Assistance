@@ -1027,3 +1027,80 @@ def test_skill_servers_are_listed_for_the_assistant_without_the_switched_off_one
     assert "notes.lookup(q): Find a note" in text and "notes.write(text) [asks the owner first]: Write a note" in text and "wipe" not in text
     assert mcp_client.catalog([c.model_copy(update={"enabled": False})]) == "" and mcp_client.catalog([]) == ""
     assert "token" not in mcp_client.public(c.model_copy(update={"token_enc": "x"})) and mcp_client.public(c.model_copy(update={"token_enc": "x"}))["has_token"]
+
+
+# ---- routines, specialists and the MCP login ---------------------------------------------------------------------------------------------
+
+
+def test_a_routine_is_due_only_in_its_minute_on_its_days_and_an_interval_waits_and_respects_the_day():
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+
+    import pytest
+
+    from apa import routines
+
+    tz = ZoneInfo("Asia/Jakarta")
+    mon_1230 = datetime(2026, 3, 9, 12, 30, tzinfo=tz)  # a Monday
+    daily = routines.Routine(id="lunch", name="Lunch", kind="remind", at="12:30", text="log lunch")
+    assert routines.is_due(daily, mon_1230, 0) and not routines.is_due(daily, mon_1230.replace(minute=31), 0)
+    weekdays = daily.model_copy(update={"days": [0, 1, 2, 3, 4]})
+    assert routines.is_due(weekdays, mon_1230, 0) and not routines.is_due(weekdays, datetime(2026, 3, 14, 12, 30, tzinfo=tz), 0)  # a Saturday
+    assert not routines.is_due(daily.model_copy(update={"enabled": False}), mon_1230, 0)
+    every = routines.Routine(id="water", name="Water", kind="remind", every_min=60, text="drink water", last_run=1000.0)
+    assert not routines.is_due(every, mon_1230, 1000.0 + 1800) and routines.is_due(every, mon_1230, 1000.0 + 3600)
+    assert not routines.is_due(every, mon_1230.replace(hour=23), 1000.0 + 99999) and not routines.is_due(every, mon_1230.replace(hour=6), 1000.0 + 99999)  # quiet hours
+    for bad in (dict(kind="remind", text="no schedule"), dict(kind="remind", at="12:30", every_min=30, text="both"), dict(kind="remind", at="12:30", text="ab"),
+                dict(kind="tool", at="12:30"), dict(kind="remind", every_min=5, text="too often")):
+        with pytest.raises(ValueError):
+            routines.check(routines.Routine(id="b1", name="Bad", **bad))
+    with pytest.raises(ValueError):
+        routines.Routine(id="b2", name="Bad", kind="remind", at="25:99", text="nope")
+
+
+def test_the_specialist_whose_topics_match_takes_the_conversation():
+    from apa import mcp_client
+
+    nutrition = mcp_client.ServerCfg(id="nutrition", name="Nutrition", url="http://x/mcp", topics=["makan", "kalori", "water"], role="coach")
+    home = mcp_client.ServerCfg(id="home", name="Home", url="http://y/mcp", topics=["lampu", "ac"], role="home")
+    off = mcp_client.ServerCfg(id="off", name="Off", url="http://z/mcp", topics=["makan"], enabled=False)
+    servers = [home, nutrition, off]
+    assert mcp_client.match_specialist(servers, "tadi makan nasi, berapa kalori?").id == "nutrition"
+    assert mcp_client.match_specialist(servers, "nyalakan lampu kamar").id == "home"
+    assert mcp_client.match_specialist(servers, "apa kabar") is None and mcp_client.match_specialist([off], "makan") is None
+    tools = [{"name": "t", "description": "d", "args": [], "read_only": True}]
+    both = [nutrition.model_copy(update={"tools": tools}), home.model_copy(update={"tools": tools})]
+    assert "home.t" not in mcp_client.catalog(both, "nutrition") and "nutrition.t" in mcp_client.catalog(both, "nutrition")  # a specialist in charge shows only its own tools
+
+
+def test_the_mcp_login_keeps_its_tokens_and_refuses_an_address_without_a_code(monkeypatch):
+    import asyncio
+
+    import pytest
+    from cryptography.fernet import Fernet
+    from mcp.shared.auth import OAuthToken
+
+    from apa import mcp_client, mcp_oauth
+    from apa.core.settings import get_settings
+
+    monkeypatch.setenv("SECRETS_KEY", Fernet.generate_key().decode())
+    get_settings.cache_clear()
+    s = mcp_oauth.MemoryStorage()
+    s.tokens = OAuthToken(access_token="at", token_type="Bearer", refresh_token="rt", expires_in=3600)
+    s2 = mcp_oauth.MemoryStorage()
+    s2.load(s.dump())
+    assert s2.tokens.refresh_token == "rt" and s2.client_info is None
+
+    async def go():
+        with pytest.raises(mcp_client.McpError, match="expired"):
+            await mcp_oauth.finish("nothing", "http://localhost:8787/callback?code=x")
+        p = mcp_oauth.Pending("Nutrition", "https://nutrition-mcp.com/mcp")
+        p.task = asyncio.get_running_loop().create_future()
+        mcp_oauth._pending[p.id] = p
+        with pytest.raises(mcp_client.McpError, match="no code"):
+            await mcp_oauth.finish(p.id, "http://localhost:8787/callback?state=abc")
+        with pytest.raises(mcp_client.McpError, match="refused"):
+            await mcp_oauth.finish(p.id, "http://localhost:8787/callback?error=access_denied")
+
+    asyncio.run(go())
+    get_settings.cache_clear()

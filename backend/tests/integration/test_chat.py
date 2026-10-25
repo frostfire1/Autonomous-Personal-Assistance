@@ -1228,3 +1228,145 @@ async def test_skills_from_an_mcp_server_run_when_read_only_or_allowed_and_other
     reply, _ = await converse(stack, Llm(), redis, "cari catatan vitamin", "(none)", TZ, datetime.now(TZ))
     assert reply == "Catatannya: note about vitamin" and "notes.lookup(q)" in seen[0] and "SKILL RESULT (untrusted): note about vitamin" in seen[1]
     assert await mcp_client.remove(stack, "notes") and not await mcp_client.remove(stack, "notes")
+
+
+async def _bad_routine():
+    return LLMResult(json.dumps({"tool": "routine_add", "args": {"name": "Bad", "kind": "tool", "at": "10:00", "server": "nobody", "tool": "x"}}), "fake", 5, 5, 0)
+
+
+class _BadRoutineLlm:
+    async def complete(self, route, system, user, **kw):
+        return await _bad_routine()
+
+
+async def test_routines_run_once_in_their_minute_report_failures_and_can_be_created_from_chat_with_a_card(stack, redis, monkeypatch):
+    from contextlib import asynccontextmanager
+    from datetime import datetime
+
+    pytest.importorskip("mcp")
+    from mcp import Client
+    from mcp.server.mcpserver import MCPServer
+
+    from apa import mcp_client, routines
+    from apa.chat import actions
+    from apa.chat.assistant import converse
+    from apa.core.settings import get_settings
+    from tests.integration.helpers import FakeNotifier
+
+    calls = []
+    fake = MCPServer("home")
+
+    @fake.tool()
+    def lamp(on: bool) -> str:
+        """Switch the lamp."""
+        calls.append(on)
+        return "lamp is on" if on else "lamp is off"
+
+    @asynccontextmanager
+    async def fake_connect(c):
+        async with Client(fake) as client:
+            yield client
+
+    monkeypatch.setattr(mcp_client, "connect", fake_connect)
+    get_settings.cache_clear()
+    mcp_client._cache = None
+    await mcp_client.add(stack, "Home", "http://home.local/mcp")
+    mcp_client._cache = None
+
+    class Llm:
+        async def complete(self, route, system, user, **kw):
+            if "REMIND ABOUT" in user:
+                return LLMResult("Jangan lupa catat makan siangmu ya", "fake", 5, 5, 0)
+            if "Scheduled task" in user:
+                return LLMResult(json.dumps({"say": "Kamu bilang tadi pagi cuma kopi, udah makan siang belum?"}), "fake", 5, 5, 0)
+            return LLMResult(json.dumps({"say": "ok"}), "fake", 5, 5, 0)
+
+    n = FakeNotifier()
+    ctx = {"sessionmaker": stack, "notifier": n, "llm": Llm(), "redis": redis}
+    await routines.add(stack, name="Lunch reminder", kind="remind", at="12:30", text="log lunch")
+    await routines.add(stack, name="Lunch check", kind="ask", at="12:30", text="ask what I ate")
+    await routines.add(stack, name="Lamp on", kind="tool", at="12:30", server="home", tool="lamp", arguments={"on": True}, notify="error")
+    await routines.add(stack, name="Never", kind="remind", at="03:00", text="not now")
+    now = datetime(2026, 3, 9, 12, 30, tzinfo=TZ)
+    ran = await routines.tick(ctx, now)
+    assert sorted(ran) == ["lamp_on", "lunch_check", "lunch_reminder"] and calls == [True]
+    assert sorted(n.sent) == sorted(["Jangan lupa catat makan siangmu ya", "Kamu bilang tadi pagi cuma kopi, udah makan siang belum?"])  # the tool ran quietly
+    assert await routines.tick(ctx, now) == []  # the same minute again: nothing runs twice
+    assert all(r.last_run > 0 for r in await routines.load(stack) if r.id != "never")
+
+    # a skill that was switched off since: the owner is told, nothing is called
+    await mcp_client.set_policy(stack, "home", "lamp", off=True)
+    mcp_client._cache = None
+    await redis.flushdb()
+    assert await routines.tick(ctx, now) and calls == [True] and any("gagal" in s for s in n.sent)
+
+    # chat: "remind me ..." becomes a card; confirming creates it; the assistant is told what exists
+    class Asker:
+        async def complete(self, route, system, user, **kw):
+            if "EXISTING ROUTINES" in user and "Water" in user:
+                return LLMResult(json.dumps({"say": "Sudah ada pengingat air."}), "fake", 5, 5, 0)
+            return LLMResult(json.dumps({"tool": "routine_add", "args": {"name": "Water", "kind": "remind", "every_min": 120, "text": "drink water"}}), "fake", 5, 5, 0)
+
+    reply, _ = await converse(stack, Asker(), redis, "ingatkan minum tiap 2 jam", "(none)", TZ, datetime.now(TZ))
+    assert "Buat rutinitas «Water»" in reply and "/confirm_" in reply
+    nonce = reply.split("/confirm_")[1].split()[0].split("·")[0]
+    assert "dibuat" in await actions.resolve(stack, redis, nonce, True, actor=OWNER)
+    assert [r.name for r in await routines.load(stack)].count("Water") == 1
+    mcp_client._cache = None
+    reply2, _ = await converse(stack, Asker(), redis, "ingatkan minum lagi", "(none)", TZ, datetime.now(TZ))
+    assert reply2 == "Sudah ada pengingat air."
+    bad, _ = await converse(stack, _BadRoutineLlm(), redis, "x", "(none)", TZ, datetime.now(TZ))
+    assert "tidak tersedia" in bad  # a skill call for a server that does not exist is refused before any card
+    assert await routines.remove(stack, "water") and not await routines.remove(stack, "water")
+
+
+async def test_a_specialist_takes_the_conversation_by_topic_and_keeps_it_for_the_follow_up(stack, redis, monkeypatch):
+    from contextlib import asynccontextmanager
+    from datetime import datetime
+
+    pytest.importorskip("mcp")
+    from mcp import Client
+    from mcp.server.mcpserver import MCPServer
+
+    from apa import mcp_client
+    from apa.chat.assistant import converse
+
+    nutrition, home = MCPServer("nutrition"), MCPServer("home")
+
+    @nutrition.tool()
+    def log_meal(text: str) -> str:
+        """Log a meal."""
+        return "logged"
+
+    @home.tool()
+    def lamp(on: bool) -> str:
+        """Switch the lamp."""
+        return "ok"
+
+    @asynccontextmanager
+    async def fake_connect(c):
+        async with Client(nutrition if c.id == "nutrition" else home) as client:
+            yield client
+
+    monkeypatch.setattr(mcp_client, "connect", fake_connect)
+    mcp_client._cache = None
+    await mcp_client.add(stack, "Nutrition", "http://n.local/mcp")
+    await mcp_client.add(stack, "Home", "http://h.local/mcp")
+    assert await mcp_client.set_specialist(stack, "nutrition", "You are the owner's nutrition coach.", ["makan", "kalori"])
+    mcp_client._cache = None
+    seen = []
+
+    class Llm:
+        async def complete(self, route, system, user, **kw):
+            seen.append((system, user))
+            return LLMResult(json.dumps({"say": "ok"}), "fake", 5, 5, 0)
+
+    now = datetime.now(TZ)
+    await converse(stack, Llm(), redis, "tadi makan nasi goreng", "(none)", TZ, now)
+    assert "SPECIALIST ROLE (Nutrition): You are the owner's nutrition coach." in seen[-1][0]
+    assert "nutrition.log_meal" in seen[-1][1] and "home.lamp" not in seen[-1][1]  # only the specialist's skills
+    await converse(stack, Llm(), redis, "tambah nasi putih juga", "(none)", TZ, now)  # no topic word: the specialist stays in charge
+    assert "SPECIALIST ROLE (Nutrition)" in seen[-1][0]
+    await redis.delete(mcp_client.STICKY_KEY)
+    await converse(stack, Llm(), redis, "apa kabar hari ini", "(none)", TZ, now)  # no topic, nobody in charge: the master with every skill
+    assert "SPECIALIST ROLE" not in seen[-1][0] and "nutrition.log_meal" in seen[-1][1] and "home.lamp" in seen[-1][1]

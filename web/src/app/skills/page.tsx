@@ -4,13 +4,21 @@ import { useState } from "react";
 import { del, post, put, useApi } from "@/lib/api";
 
 type Tool = { name: string; description: string; args: string[]; read_only: boolean };
-type Server = { id: string; name: string; url: string; header: string; has_token: boolean; enabled: boolean; auto: string[]; off: string[]; tools: Tool[]; refreshed_at: number };
+type Server = { id: string; name: string; url: string; header: string; has_token: boolean; has_login: boolean; role: string; topics: string[]; enabled: boolean; auto: string[]; off: string[]; tools: Tool[]; refreshed_at: number };
 
 export default function SkillsPage() {
   const { data, reload } = useApi<{ servers: Server[]; mcp_server_on: boolean }>("/skills");
   const [f, setF] = useState({ name: "", url: "", token: "", header: "Authorization" });
   const [msg, setMsg] = useState("");
   const [busy, setBusy] = useState(false);
+  const [login, setLogin] = useState<{ pending: string; auth_url: string; redirect: string } | null>(null);
+  const [pasted, setPasted] = useState("");
+  const [spec, setSpec] = useState<Record<string, { role: string; topics: string }>>({});
+  const NUTRITION = {
+    name: "Nutrition", url: "https://nutrition-mcp.com/mcp",
+    role: "You are the owner's nutrition coach. When they mention a meal, a drink, water, a weigh-in or a food question, use the nutrition skills: look foods up (search_foods, get_food_macros), then log them. Ask one short question if the portion is unclear. Be encouraging and never shame food choices. Meal photos arrive as a description: estimate macros from it and say it is an estimate.",
+    topics: "makan, minum, sarapan, makan siang, makan malam, camilan, kalori, protein, karbo, lemak, gula, kafein, air putih, berat badan, diet, meal, breakfast, lunch, dinner, snack, calories, macros, water, weight",
+  };
 
   async function run(fn: () => Promise<unknown>, ok: string) {
     setBusy(true);
@@ -39,6 +47,24 @@ export default function SkillsPage() {
             {busy ? "Connecting..." : "Connect"}
           </button>
         </div>
+        <div className="row">
+          <button disabled={busy || !f.name.trim() || !f.url.trim()} onClick={() => run(async () => {
+            const r = await post<{ pending?: string; auth_url?: string; redirect?: string }>("/skills/login/start", { name: f.name, url: f.url });
+            if (r.pending) setLogin({ pending: r.pending, auth_url: r.auth_url!, redirect: r.redirect! });
+          }, "Open the login page below.")}>Connect with login</button>
+          <button onClick={() => { setF({ ...f, name: NUTRITION.name, url: NUTRITION.url }); setMsg("Nutrition tracker filled in: it asks for a login (tap Connect with login)."); }}>Example: nutrition tracker</button>
+        </div>
+        {login && (
+          <div className="card" style={{ marginTop: 8 }}>
+            <ol>
+              <li>Open <a href={login.auth_url} target="_blank" rel="noreferrer">the login page</a> and sign in.</li>
+              <li>The browser then shows an error page. That is expected: copy the <b>whole address</b> from the address bar (it starts with <code>{login.redirect}</code>).</li>
+              <li>Paste it here:</li>
+            </ol>
+            <input style={{ width: "100%" }} placeholder={`${login.redirect}?code=...`} value={pasted} onChange={(e) => setPasted(e.target.value)} />
+            <button disabled={busy || !pasted.includes("code=")} onClick={() => run(async () => { await post("/skills/login/finish", { pending: login.pending, redirected_url: pasted }); setLogin(null); setPasted(""); }, "Signed in and connected.")}>Finish</button>
+          </div>
+        )}
         <span className="muted">{msg}</span>
       </div>
       <p className="muted">
@@ -50,11 +76,21 @@ export default function SkillsPage() {
         <div className="card" key={s.id} style={{ marginBottom: 8 }}>
           <div className="row">
             <b>{s.name}</b>
-            <span className="muted">{s.url}{s.has_token ? " · token saved" : ""}</span>
+            <span className="muted">{s.url}{s.has_token ? " · token saved" : ""}{s.has_login ? " · signed in" : ""}</span>
             <button onClick={() => run(() => put(`/skills/${s.id}`, { enabled: !s.enabled }), s.enabled ? "Switched off." : "Switched on.")}>{s.enabled ? "Switch off" : "Switch on"}</button>
             <button onClick={() => run(() => post(`/skills/${s.id}/refresh`, {}), "Tools refreshed.")}>Refresh tools</button>
             <button className="link" onClick={() => { if (confirm(`Remove ${s.name}?`)) run(() => del(`/skills/${s.id}`), "Removed."); }}>Remove</button>
           </div>
+          <details>
+            <summary className="muted">Specialist: let this skill take over the conversation for its topics</summary>
+            <p className="muted">When a message contains one of the topic words, the assistant switches to this role and uses only this server&apos;s tools; follow-ups stay with it for 20 minutes.</p>
+            <textarea rows={3} style={{ width: "100%" }} placeholder="Role: how the assistant behaves while it is in charge" value={spec[s.id]?.role ?? s.role} onChange={(e) => setSpec({ ...spec, [s.id]: { role: e.target.value, topics: spec[s.id]?.topics ?? s.topics.join(", ") } })} />
+            <input style={{ width: "100%" }} placeholder="topic words, comma separated" value={spec[s.id]?.topics ?? s.topics.join(", ")} onChange={(e) => setSpec({ ...spec, [s.id]: { role: spec[s.id]?.role ?? s.role, topics: e.target.value } })} />
+            <div className="row">
+              <button onClick={() => run(() => put(`/skills/${s.id}`, { role: spec[s.id]?.role ?? s.role, topics: (spec[s.id]?.topics ?? s.topics.join(", ")).split(",").map((x) => x.trim()).filter(Boolean) }), "Saved.")}>Save specialist</button>
+              {s.url.includes("nutrition-mcp.com") && <button onClick={() => setSpec({ ...spec, [s.id]: { role: NUTRITION.role, topics: NUTRITION.topics } })}>Fill in the nutrition coach</button>}
+            </div>
+          </details>
           {s.tools.length === 0 ? <p className="muted">No tools listed.</p> : (
             <table>
               <thead><tr><th>Tool</th><th>What it does</th><th>Runs</th><th>Allow without asking</th><th>Off</th></tr></thead>

@@ -331,6 +331,54 @@ async def profile_content(request: Request) -> dict:
     return {"result": await content.digest(SessionLocal, request.app.state.llm, today, force=True)}
 
 
+@router.get("/routines")
+async def routines_list() -> dict:
+    from apa import routines
+
+    return {"routines": [r.model_dump() for r in await routines.load(SessionLocal)]}
+
+
+@router.post("/routines")
+async def routines_add(routine: dict = Body()) -> dict:
+    """Create a routine (a reminder, a task for the assistant, or a skill call) on a schedule."""
+    from apa import routines
+
+    try:
+        r = await routines.add(SessionLocal, **{k: v for k, v in routine.items() if k in routines.Routine.model_fields and k not in ("last_run",)})
+    except (ValueError, TypeError) as e:
+        raise HTTPException(status_code=400, detail=str(e)[:300]) from None
+    return r.model_dump()
+
+
+@router.put("/routines/{routine_id}")
+async def routines_toggle(routine_id: str, enabled: bool = Body(embed=True)) -> dict:
+    from apa import routines
+
+    if not await routines.toggle(SessionLocal, routine_id, enabled):
+        raise HTTPException(status_code=404, detail="no such routine")
+    return {"ok": True}
+
+
+@router.delete("/routines/{routine_id}")
+async def routines_delete(routine_id: str) -> dict:
+    from apa import routines
+
+    if not await routines.remove(SessionLocal, routine_id):
+        raise HTTPException(status_code=404, detail="no such routine")
+    return {"ok": True}
+
+
+@router.post("/routines/{routine_id}/run")
+async def routines_run(routine_id: str, request: Request) -> dict:
+    """Queue a routine to run once now (the worker owns the bot and the skills)."""
+    from apa import routines
+
+    if not any(r.id == routine_id for r in await routines.load(SessionLocal)):
+        raise HTTPException(status_code=404, detail="no such routine")
+    await request.app.state.arq.enqueue_job("routine_run_now", routine_id)
+    return {"ok": True}
+
+
 @router.get("/skills")
 async def skills_list() -> dict:
     """The MCP servers the owner connected (skills of the assistant), with their tools; tokens are never returned."""
@@ -352,6 +400,28 @@ async def skills_add(name: str = Body(max_length=40), url: str = Body(max_length
     return mcp_client.public(c)
 
 
+@router.post("/skills/login/start")
+async def skills_login_start(name: str = Body(max_length=40), url: str = Body(max_length=300)) -> dict:
+    """Connect a server that wants a login (OAuth): returns the login page to open in a browser (or the server when none was needed)."""
+    from apa import mcp_client, mcp_oauth
+
+    try:
+        return await mcp_oauth.start(SessionLocal, name, url)
+    except mcp_client.McpError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from None
+
+
+@router.post("/skills/login/finish")
+async def skills_login_finish(pending: str = Body(max_length=40), redirected_url: str = Body(max_length=2000)) -> dict:
+    """The owner pastes the address the browser ended on after signing in; the server is kept with its login."""
+    from apa import mcp_client, mcp_oauth
+
+    try:
+        return mcp_client.public(await mcp_oauth.finish(pending, redirected_url))
+    except mcp_client.McpError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from None
+
+
 @router.post("/skills/{server_id}/refresh")
 async def skills_refresh(server_id: str) -> dict:
     from apa import mcp_client
@@ -364,10 +434,17 @@ async def skills_refresh(server_id: str) -> dict:
 
 @router.put("/skills/{server_id}")
 async def skills_policy(server_id: str, enabled: bool | None = Body(default=None), tool: str | None = Body(default=None, max_length=80),
-                        auto: bool | None = Body(default=None), off: bool | None = Body(default=None)) -> dict:
-    """Switch a server on or off, or set a tool: `auto` = runs without asking, `off` = never runs."""
+                        auto: bool | None = Body(default=None), off: bool | None = Body(default=None),
+                        role: str | None = Body(default=None, max_length=600), topics: list[str] | None = Body(default=None, max_length=30)) -> dict:
+    """Switch a server on or off, set a tool (`auto` = runs without asking, `off` = never runs), or make the server a specialist
+    (`role`: how the assistant behaves while it is in charge; `topics`: words that hand the conversation to it)."""
     from apa import mcp_client
 
+    if role is not None or topics is not None:
+        if not await mcp_client.set_specialist(SessionLocal, server_id, role, topics):
+            raise HTTPException(status_code=404, detail="no such server")
+    if enabled is None and tool is None and auto is None and off is None:
+        return {"ok": True}
     if not await mcp_client.set_policy(SessionLocal, server_id, tool, auto=auto, off=off, enabled=enabled):
         raise HTTPException(status_code=404, detail="no such server or tool")
     return {"ok": True}

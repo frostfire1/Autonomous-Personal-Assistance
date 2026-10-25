@@ -25,6 +25,38 @@ Safety rules that are always on:
 - The assistant sends the server what it needs to use the tool, and only the servers you connected can be called. Connect servers you
   trust.
 
+### Servers that ask for a login (OAuth), for example a nutrition tracker
+
+Some servers (the free open-source nutrition tracker at `https://nutrition-mcp.com/mcp`, for one) tie your data to an account. On the Skills page use
+**Connect with login**: the page shows the server's login page; sign in there; the browser then ends on an error page whose address starts with
+`http://localhost:8787/callback?code=...` (nothing listens there on purpose); copy that whole address and paste it back. The tokens are kept encrypted
+and refreshed by themselves; if the login ever expires for good, the skill says so and you sign in again. The **Example: nutrition tracker** button fills
+in the address, and its Specialist box can be filled with a ready-made coach role.
+
+### Specialists: one conversation, the right agent
+
+The main assistant (the master) knows every skill. For a domain that deserves its own manners, open a server's **Specialist** box and give it a **role**
+(how the assistant behaves while it is in charge) and **topic words** (for example makan, kalori, air putih). When a message contains a topic word, the
+assistant switches to that role and sees only that server's tools; a follow-up without a keyword ("tambah nasi putih") stays with it for 20 minutes.
+Everything else goes to the master with all the skills.
+
+Meal photos: an MCP tool takes text, numbers or links, not a photo. A photo is read by the assistant's own vision model (the same one that reads
+receipts); what it sees is passed on as text, and the nutrition tools then log it. What a server sends back may contain images; only text is shown for now.
+
+### Routines: schedules and automations (the Routines page, or ask in chat)
+
+A routine runs by itself at a time of day (on chosen days) or every N minutes (15 or more, between 08:00 and 21:30):
+
+| Kind | What it does |
+|---|---|
+| **Remind** | a reminder in your own style ("log lunch") |
+| **Task** | the assistant is given the task and does it like in a chat, with its look-ups and skills; anything it wants to change still needs your tap |
+| **Skill call** | one tool of a connected server with fixed arguments, for example a smart-home action. You approved it when you created the routine, so it runs without asking, but only while the tool is still allowed on the Skills page |
+
+Say "remind me to log lunch at 12:30 every day" in Telegram and the assistant shows a card; confirm it and the routine exists. Each run happens once, at
+most 60 runs a day in all, and every failure is reported to you. Smart-home devices work the same way as any other skill: connect their MCP server
+(for example a Home Assistant MCP server) on the Skills page, then add a Skill call routine.
+
 ## 2. Your own data as an MCP server (off by default)
 
 Set `MCP_ENABLED=true` in `.env` and `./deploy.sh up`. Any MCP client (Claude Desktop, Claude Code, an IDE, your own agent) can then

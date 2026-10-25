@@ -15,6 +15,7 @@ const PANELS = [
   ["/logs", "Conversations"],
   ["/about", "About me"],
   ["/skills", "Skills"],
+  ["/routines", "Routines"],
   ["/diary", "Diary"],
   ["/setup", "Get started"],
   ["/models", "AI Models"],

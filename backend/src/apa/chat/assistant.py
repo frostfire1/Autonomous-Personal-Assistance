@@ -40,6 +40,9 @@ MEMORY_TOOL_DOC = """Memory tools (they take effect at once; then answer):
   the owner asks you to research or find out something you cannot answer from your data. The topic is a short general phrase with no
   personal data or numbers. Tell the owner it is started, in one short sentence.
 - research_last {}  the latest research report and its links, for a follow-up question
+- routine_add {"name": string, "kind": "remind"|"ask"|"tool", "at": "HH:MM" (24 h, the owner's time) or "every_min": 15+, "days": [0-6]? (0=Mon; empty = every day), "text": string (the reminder, or the task for you), "server"+"tool"+"arguments" (kind tool: one skill, run on its own at that time)}
+  create a scheduled routine when the owner asks for a reminder, a recurring task or an automation ("remind me to log lunch at 12:30 every day"). The owner sees a card and must confirm.
+- routine_delete {"name": string}  remove a routine (also a card)
 - gif {"query": string}  find a GIF for a few plain words ("celebrate", "cat sleepy"). Use it rarely, only when it truly fits the moment
   (a celebration, a joke, comfort) and the owner's style is playful; never on money losses, health, security or other serious topics.
   The result tells you the marker to add at the end of your reply."""
@@ -100,7 +103,7 @@ def parse_step(raw: str) -> tuple[str, Any]:
     return "bad", None
 
 
-async def _context(sm, tz: ZoneInfo, now: datetime, history_block: str, reply_to: int | None) -> str:
+async def _context(sm, tz: ZoneInfo, now: datetime, history_block: str, reply_to: int | None, only_skill: str | None = None) -> str:
     facts = await finance_snapshot(sm, tz, now)
     replied = ""
     if reply_to is not None:  # the owner replied to one of the bot's messages: say which one and what it was about
@@ -119,9 +122,12 @@ async def _context(sm, tz: ZoneInfo, now: datetime, history_block: str, reply_to
     learned_block = ""  # learned items are part of the card
     shared = await assistant_memory.shared_journal(sm, 5)
     shared_block = ("DIARY ENTRIES THE OWNER CHOSE TO SHARE WITH YOU:\n" + "\n".join(f"{e['date']}: {e['text']}" for e in shared)[-1500:] + "\n") if shared else ""
-    from apa import mcp_client
+    from apa import mcp_client, routines
 
-    skills = mcp_client.catalog(await mcp_client.current(sm))
+    skills = mcp_client.catalog(await mcp_client.current(sm), only_skill)
+    existing = routines.summary_lines(await routines.load(sm))
+    if existing:
+        skills += ("\n" if skills else "") + "EXISTING ROUTINES (do not create a duplicate):\n" + existing
     notes = await assistant_memory.load(sm)
     remembered = ("WHAT YOU REMEMBER about the owner (their own notes):\n" + "\n".join(f"{i}. {n}" for i, n in enumerate(notes, 1)) + "\n") if notes else ""
     style_block = "HOW TO WRITE TO THE OWNER:\n" + await profile.style_guide(sm) + "\n"
@@ -142,12 +148,17 @@ async def converse(
     reply_to: int | None = None,
 ) -> tuple[str, int]:
     """The assistant's reply to `text` (plain text or a confirmation card) and the tokens spent."""
-    transcript = [await _context(sm, tz, now, history_block, reply_to), f"OWNER: {text}"]
+    from apa import mcp_client
+
+    spec = await mcp_client.pick_specialist(await mcp_client.current(sm), redis, text)  # a specialist skill agent may take the conversation
+    system = SYSTEM + (f"\n\nSPECIALIST ROLE ({spec.name}): {spec.role}\nYou are in charge of this conversation until the owner changes the topic." if spec and spec.role else "")
+    only = {"only_skill": spec.id} if spec else {}
+    transcript = [await _context(sm, tz, now, history_block, reply_to, **only), f"OWNER: {text}"]
     tokens = 0
     for step in range(MAX_STEPS + 1):
         final = step == MAX_STEPS  # out of look-ups: the next answer must be words
         res = await llm.complete(
-            ROUTINE, SYSTEM, "\n\n".join(transcript) + ("\n\n(No more look-ups: answer now with {\"say\": ...}.)" if final else ""),
+            ROUTINE, system, "\n\n".join(transcript) + ("\n\n(No more look-ups: answer now with {\"say\": ...}.)" if final else ""),
             json_mode=True, max_tokens=600, temperature=0.3, agent="A-00",
         )
         tokens += (res.prompt_tokens or 0) + (res.completion_tokens or 0)
@@ -162,6 +173,8 @@ async def converse(
             log.info("assistant_lookup", tool=name)
             transcript += [f"TOOL {name} {json.dumps(args, ensure_ascii=False)[:200]}", f"RESULT:\n{result}"]
             continue
+        if name in ("routine_add", "routine_delete") and not final:
+            return (await actions.propose_internal(sm, redis, name, args if isinstance(args, dict) else {}))[:MAX_REPLY], tokens
         if name == "mcp" and not final:
             from apa import mcp_client
 
