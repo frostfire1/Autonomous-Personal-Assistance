@@ -1121,6 +1121,7 @@ async def test_what_the_phone_is_playing_is_stored_deduplicated_and_the_assistan
     t1 = now - timedelta(minutes=50)
     await usage.store(stack, "phone", "android", day, [
         {"app": "Mobile Legends", "seconds": 5400, "first_at": t1.astimezone(UTC) - timedelta(hours=2), "last_at": t1.astimezone(UTC)},
+        {"app": "Windows Search", "seconds": 3, "first_at": (now - timedelta(minutes=2)).astimezone(UTC), "last_at": (now - timedelta(minutes=1)).astimezone(UTC)},
         {"app": "Telegram", "seconds": 600, "first_at": (now - timedelta(hours=1)).astimezone(UTC), "last_at": (now - timedelta(minutes=5)).astimezone(UTC)}])
     items = [{"app": "YouTube", "title": "Season baru Delta Force", "artist": "Delta Force ID", "at": now - timedelta(minutes=30)},
              {"app": "YouTube", "title": "Season baru Delta Force", "artist": "Delta Force ID", "at": now - timedelta(minutes=28)},  # the same video, updated
@@ -1134,5 +1135,9 @@ async def test_what_the_phone_is_playing_is_stored_deduplicated_and_the_assistan
 
     out = await run_read(stack, TZ, now, "activity", {"hours": 6})
     lines = out.splitlines()
+    assert "Windows Search" not in out and "Wartawan" not in out
     assert lines[1].startswith("- Telegram on phone: used until") and lines[2].startswith("- Mobile Legends on phone")  # most recent first
+    await mem.replace_api_watch(stack, day, [{"k": "subscribed", "c": "Some Channel", "t": ""}])  # followed channels are not "content"
+    out = await run_read(stack, TZ, now, "activity", {"hours": 6})
+    assert "Some Channel" not in out
     assert "LAST REPORT FROM: phone" in out and "[listened] Lagu Santai - Tulus" in out and "Season baru Delta Force - Delta Force ID" in out

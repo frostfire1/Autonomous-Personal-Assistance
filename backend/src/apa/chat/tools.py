@@ -252,7 +252,7 @@ async def _activity(sm, tz, now, a: ActivityQ) -> str:
     if not rows:
         return "No app usage has been reported yet (the phone app or the computer script must send it)."
     cutoff = now - timedelta(hours=a.hours)
-    used = sorted((r for r in rows if r.last_at and r.last_at >= cutoff), key=lambda r: r.last_at, reverse=True)
+    used = sorted((r for r in rows if r.last_at and r.last_at >= cutoff and usage.meaningful(r.app, r.seconds)), key=lambda r: r.last_at, reverse=True)
     parts = []
     if used:
         parts.append(f"APPS USED IN THE LAST {a.hours} H, most recent first (local time):\n" + "\n".join(
@@ -265,7 +265,8 @@ async def _activity(sm, tz, now, a: ActivityQ) -> str:
         seen[r.device] = max(seen.get(r.device, r.updated_at), r.updated_at)
     parts.append("LAST REPORT FROM: " + ", ".join(f"{d} at {t.astimezone(tz):%d/%m %H:%M}" for d, t in seen.items())
                  + " (devices report about every 30 minutes, so the last minutes may be missing)")
-    items = [w for w in await assistant_memory.watched(sm, 3, now.date())][-6:]
+    kinds = ("watched", "listened", "liked", "saved", "uploaded", "searched")  # what was watched or heard, not the channels followed
+    items = sorted((w for w in await assistant_memory.watched(sm, 3, now.date()) if w["k"] in kinds), key=lambda w: (w["date"], w.get("at") or ""))[-6:]
     if items:
         parts.append("LATEST CONTENT (YouTube, music; newest last):\n" + "\n".join(
             f"- [{w['k']}] {w.get('t', '')} - {w.get('c', '')} ({w['date']:%d/%m}{' ' + w['at'] if w.get('at') else ''})" for w in items))

@@ -42,6 +42,14 @@ _PRETTY = {"msedge": "Microsoft Edge", "chrome": "Google Chrome", "code": "VS Co
            "powershell": "PowerShell", "cmd": "Command Prompt", "obs64": "OBS Studio", "applicationframehost": "Windows app", "searchhost": "Windows Search"}
 
 
+NOISE = frozenset({"windows search", "windows app", "aw-qt", "activitywatch", "peluncur sistem", "keamanan", "searchhost", "system ui", "snippingtool", "taskmgr"})
+
+
+def meaningful(app: str, seconds: int) -> bool:
+    """An app worth naming as "what I used": not a system helper, and used for at least half a minute that day."""
+    return app.lower() not in NOISE and seconds >= 30
+
+
 def pretty(app: str) -> str:
     """A Windows process name read as an app name: 'msedge.exe' -> 'Microsoft Edge', 'discord.exe' -> 'Discord'."""
     name = " ".join(app.split())

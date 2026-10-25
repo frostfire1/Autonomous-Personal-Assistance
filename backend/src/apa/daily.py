@@ -128,8 +128,8 @@ async def gather(sm: async_sessionmaker, tz: ZoneInfo, day: date) -> dict[str, A
         f["usage"] = {"hours": round(total / 3600, 1), "devices": sorted({r.device for r in rows}),
                       "top_apps": [(a, f"{round(s / 60)} min") for a, s in per_app.most_common(5)],
                       "categories": {c: round(s / total, 2) for c, s in per_cat.most_common(4)},
-                      "last_used": [(r.app, f"{r.last_at.astimezone(tz):%H:%M}") for r in sorted((r for r in rows if r.last_at), key=lambda r: r.last_at, reverse=True)[:4]],
-                      "windows": [(r.app, f"{r.first_at.astimezone(tz):%H:%M}-{r.last_at.astimezone(tz):%H:%M}") for r in sorted((r for r in rows if r.first_at and r.last_at), key=lambda r: -r.seconds)[:5]],
+                      "last_used": [(r.app, f"{r.last_at.astimezone(tz):%H:%M}") for r in sorted((r for r in rows if r.last_at and usage.meaningful(r.app, r.seconds)), key=lambda r: r.last_at, reverse=True)[:4]],
+                      "windows": [(r.app, f"{r.first_at.astimezone(tz):%H:%M}-{r.last_at.astimezone(tz):%H:%M}") for r in sorted((r for r in rows if r.first_at and r.last_at and usage.meaningful(r.app, r.seconds)), key=lambda r: -r.seconds)[:5]],
                       "late": bool(first and first.astimezone(tz).hour < 5) or bool(last and last.astimezone(tz).hour < 4 and last.astimezone(tz).date() == day)}
     yt = [w for w in await assistant_memory.watched(sm, 0, day) if w["date"] == day]
     if yt:
