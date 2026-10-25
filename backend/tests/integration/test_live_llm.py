@@ -7,7 +7,7 @@ without a quorum, the audit chain verifies) and prints what happened, so run it 
     # terminal 1: litellm --config infra/litellm/config.yaml --port 4000   (env from .env)
     # terminal 2:
     LIVE_LLM=1 LITELLM_BASE_URL=http://127.0.0.1:4000/v1 LITELLM_MASTER_KEY=... \\
-    TEST_DATABASE_URL=... TEST_REDIS_URL=... pytest tests/integration/test_live_osiris.py -s
+    TEST_DATABASE_URL=... TEST_REDIS_URL=... pytest tests/integration/test_live_llm.py -s
 """
 
 import asyncio

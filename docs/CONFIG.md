@@ -15,7 +15,7 @@ Two layers, on purpose:
 | News topics | National news and Cybersecurity and CVEs |
 | National news country | Indonesia (Antara, CNN Indonesia, CNBC Indonesia, Detik, Tempo, Republika) |
 | CVE rule | CVSS 7.0 or higher (high and critical) plus anything CISA lists as exploited, last 24 hours |
-| AI providers | kunciai primary, Osiris fallback, through LiteLLM (`infra/litellm/config.yaml`) |
+| AI providers | a primary and a fallback OpenAI-compatible provider, through LiteLLM (`infra/litellm/config.yaml`) |
 | Agents | the blueprint's agents with their roles; five debaters; Arbiter decides |
 | Photo storage | Garage S3 (container) |
 | Database, queue | Postgres 17, Redis 7 (containers) |
@@ -110,7 +110,7 @@ Copy it to `config.yaml`, replace the models (or leave it and choose models in t
 | `INGEST_API_KEY` | the key for the dashboard and the Android app | generated |
 | `INGEST_HMAC_SECRET`, `INGEST_RATE_PER_MIN` | signed requests; call cap | off, 120 |
 | `LITELLM_MASTER_KEY`, `LITELLM_BASE_URL` | the AI gateway | generated, bundled |
-| `KUNCI_API_*`, `OSIRIS_API_*`, `MY_API_*` | provider addresses and keys used by the LiteLLM files | |
+| the `*_API_BASE` / `*_API_KEY` pairs listed in `.env.example` | provider addresses and keys used by the LiteLLM files | |
 | `LLM_MAX_CONCURRENCY`, `LLM_MAX_RPM`, `DEBATE_QUORUM` | AI call limits; votes needed to commit | 3, 48, 3 |
 | `TELEGRAM_BOT_TOKEN`, `TELEGRAM_OWNER_ID` | the bot and the only account it obeys | |
 | `EVIDENCE_BACKEND`, `EVIDENCE_DIR`, `MINIO_*` | photo storage (the dashboard overrides) | `local`, S3 values |

@@ -66,10 +66,10 @@ bash deploy/deploy.sh up      # podman or docker is detected; CONTAINER_ENGINE=d
 
 ### The AI gateway needs at least one working provider
 
-- Blueprint default: put your kunciai and Osiris keys in `.env` (`KUNCI_API_KEY`, `OSIRIS_API_KEY`); `infra/litellm/config.yaml`
+- Blueprint default: put your primary and fallback provider keys in `.env` (the variable names are in `.env.example`); `infra/litellm/config.yaml`
   is the blueprint's routing and fallbacks.
 - Your own provider on a fresh install: `setup.sh` copies `infra/litellm/config.example.yaml` to `config.yaml` (when you have
-  no kunciai or Osiris key) and writes `MY_API_BASE` and `MY_API_KEY`. The model names in that file are **placeholders**:
+  no provider key for the blueprint default) and writes `MY_API_BASE` and `MY_API_KEY`. The model names in that file are **placeholders**:
   replace them, or assign a model to each role in the dashboard (AI Models), which needs no restart.
 
 ## Update

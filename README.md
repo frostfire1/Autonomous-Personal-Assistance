@@ -7,7 +7,7 @@ It implements `system_architecture_blueprint_v4.1`; [docs/decisions.md](docs/dec
 differs from the blueprint.
 
 **The defaults are the blueprint's** (Indonesian briefing, Indonesian national news, national and cybersecurity topics,
-the kunciai and Osiris AI providers, Garage S3, Postgres, Redis). **Everything else is changeable** from the web
+two OpenAI-compatible AI providers, Garage S3, Postgres, Redis). **Everything else is changeable** from the web
 dashboard after setup: AI providers and the model of every agent, your own agents, news countries, feeds and topics, the
 CVE rule, voices and languages, the home currency, storage.
 

@@ -98,34 +98,27 @@ Implemented in `backend/src/apa/pipeline/commit.py`. Decisions taken while build
 
 ### Model routing and fallbacks (probed and verified 2026-10-23)
 
-`infra/litellm/config.yaml` was rebuilt from what the key really serves. The Osiris dashboard lists
-18 *allowed* models, but allowed is not served: 8 returned `model_not_found`
-(`glm-4.6`, `glm-4.6v`, `glm-4.7`, `minimax-m3`, `osiris-claude-haiku-4.5`,
-`osiris-claude-sonnet-4.5`, `qwen3.7-max`, `qwen3.7-plus`) and 3 were erroring
-(`deepseek-v4-flash` 502, `qwen3.8-max` 502, `glm-5.1`). Re-probe with `scripts/probe_models.py`
-after any key or plan change, then update the config comment and `tests/test_litellm_config.py`.
+`infra/litellm/config.yaml` was rebuilt from what the key really serves. A provider's dashboard can list more *allowed* models
+than it serves: in the first probe 8 of 18 returned `model_not_found` and 3 were erroring (HTTP 502). Re-probe with
+`scripts/probe_models.py` after any key or plan change, then update the config comment and `tests/test_litellm_config.py`.
 
-- **Chains** (3 fallbacks each, fastest valid-JSON model first, the pricier `deepseek-v4-pro` as a late
-  resort; every vision hop verified to read an image): routine `deepseek-v4-flash` -> glm-5.3 ->
-  glm-5.2 -> deepseek-v4-pro. Vision `glm-5v-turbo` -> glm-5.3 -> glm-5.2 -> kimi-k2.5.
-- **Primaries that are not served were replaced, not kept:** Arbiter is now `glm-5.3` (blueprint:
-  haiku-4.5) and the `/private` route is `glm-5.2` (blueprint: sonnet-4.5). The `/private` choice is
-  **provisional**: nobody has judged glm-5.2's quality for emotional support. Revisit before A-06.
-- **Verified against the real LiteLLM Router and the live endpoint** (scratch environment, not the
-  project): a 502 primary retries once, then falls back and succeeds; a `model_not_found` (400)
-  primary falls back immediately; a dead primary is then skipped by the cooldown (it did not appear
-  in a later burst); the vision route reads a receipt. `num_retries` is 1 because retries spend from
-  the rate limit.
-- **Rate limit finding:** Osiris states 30 requests/minute, but it rejects parallel bursts well
-  before that: of 5 parallel calls to one model, 2 got `RateLimitError` in an otherwise quiet minute.
-  The chain absorbed it (5/5 answered) at the cost of extra upstream calls. The debate sends exactly
-  that pattern (5 parallel calls on one route). **Done:** `LLMClient` caps in-flight requests at
-  `LLM_MAX_CONCURRENCY` (default 3). The cap is process-wide on the shared client, not per debate,
-  so several transactions arriving together share it. Tested against a fake provider that returns 429
-  above 3 concurrent requests: with the cap a debate is never rejected; without it, exactly 2 of 5
-  calls were. The debate quorum above closes the "2 agents decide" gap. **Cost:** with a cap of 3 a
-  debate runs in two waves, so it is slower than five parallel calls would be if the provider allowed
-  them; the real effect on latency has not been measured against Osiris.
+- **Chains** (3 fallbacks each, fastest valid-JSON model first, the pricier "pro" model as a late resort; every vision hop verified
+  to read an image): the routine route and the vision route each have their chain in the config.
+- **Primaries that are not served were replaced, not kept:** the Arbiter and the `/private` route use the nearest working models
+  instead of the blueprint's. The `/private` choice is **provisional**: nobody has judged that model's quality for emotional
+  support. Revisit before A-06.
+- **Verified against the real LiteLLM Router and the live endpoint** (scratch environment, not the project): a 502 primary retries
+  once, then falls back and succeeds; a `model_not_found` (400) primary falls back immediately; a dead primary is then skipped by
+  the cooldown (it did not appear in a later burst); the vision route reads a receipt. `num_retries` is 1 because retries spend
+  from the rate limit.
+- **Rate limit finding:** the provider states 30 requests/minute, but it rejects parallel bursts well before that: of 5 parallel
+  calls to one model, 2 got `RateLimitError` in an otherwise quiet minute. The chain absorbed it (5/5 answered) at the cost of
+  extra upstream calls. The debate sends exactly that pattern (5 parallel calls on one route). **Done:** `LLMClient` caps
+  in-flight requests at `LLM_MAX_CONCURRENCY` (default 3). The cap is process-wide on the shared client, not per debate, so several
+  transactions arriving together share it. Tested against a fake provider that returns 429 above 3 concurrent requests: with the
+  cap a debate is never rejected; without it, exactly 2 of 5 calls were. The debate quorum above closes the "2 agents decide" gap.
+  **Cost:** with a cap of 3 a debate runs in two waves, so it is slower than five parallel calls would be if the provider allowed
+  them; the real effect on latency has not been measured against that provider.
 - **Known weaknesses of this test:** one model-quality judgement was not made (see `/private`
   above); latency is slow (`glm-5.3` 1-3 s per call, slowest debater 16 s in an early run), so the
   blueprint's "under 1.5 s per debate" does not hold with these models; fallback-on-bad-JSON is
@@ -201,13 +194,13 @@ photos (2 overlapping pages + an EDC slip): the model separated the pages, code 
   receipts mistakenly sent in one album would be refused (their items cannot sum to one total), not split.
   Only 4 of 5 debaters voted in the live run, as before.
 
-### First live run on real Osiris (2026-10-24) and the category constraint it forced
+### First live run on a real provider (2026-10-24) and the category constraint it forced
 
 Run through the **real LiteLLM proxy** with `infra/litellm/config.yaml`, my real `LLMClient` and a real
-Postgres (`tests/integration/test_live_osiris.py`, skipped unless `LIVE_LLM=1` because it spends tokens).
+Postgres (`tests/integration/test_live_llm.py`, skipped unless `LIVE_LLM=1` because it spends tokens).
 Result: extraction was right on every case that parsed (30.000, 5.000.000, 200.000 + fee 2.500) and the
 prompt-injection attempt was ignored; a transaction went through 4 to 5 debaters, committed, and the audit
-chain verified. Everything was served by `glm-5.3`: the primary `deepseek-v4-flash` was still returning 502,
+chain verified. Everything was served by a fallback model: the primary was still returning 502,
 so the proxy's fallback was exercised for real.
 
 - **Defect found and fixed:** the agents answered `food_beverage`, `coffee` and `Food & Beverage` for one
@@ -330,90 +323,55 @@ volunteers anything, and debate content is still never sent.
   it can only become a card you read and confirm. Budget edits ignore the elastic band (they set base and
   current together). No bulk operations, no editing the amount (undo and re-add instead).
 
-### Provider decision (2026-10-24): **kunciai primary, Osiris fallback**
+### Provider decision (2026-10-24): one primary provider, a second as the fallback
 
-You said: "if osiris is very bad use kunci AI as main". On the evidence below it is, so `infra/litellm/config.yaml`
-now leads with kunciai and falls back to Osiris. Both providers rate-limit **per key**, so the first hop of every
-chain is on the other provider (a fallback on the throttled key is refused too); the vision chain falls back on
-Osiris only, because kunciai has one image-reading model. `tests/test_litellm_config.py` pins this per provider.
+The rule the owner set: if the first provider is clearly worse, lead with the second. On the evidence below it was, so
+`infra/litellm/config.yaml` leads with provider A and falls back to provider B. Both providers rate-limit **per key**, so the first
+hop of every chain is on the other provider (a fallback on the throttled key is refused too); the vision chain falls back on
+provider B only, because provider A has one image-reading model. `tests/test_litellm_config.py` pins this per provider.
 
-| Measured, same load | kunciai | Osiris |
+| Measured, same load | Provider A (primary) | Provider B (fallback) |
 |---|---|---|
 | Debate votes | 60 of 60, ~4 s per debate, 0 failures | 29 of 30 at 6-9 s, throttled to 24 rpm; one 33 s outlier and one malformed reply |
-| `deepseek-v4-flash` | works | 502 (as is `qwen3.8-max`); 8 of its 18 allowed models are "not found" |
+| The cheap routine model | works | 502; 8 of its 18 allowed models are "not found" |
 | Rate limit | ~60 rpm (inferred: 13 of 30 refused in a third burst) | 30 rpm per key (stated) |
 | Vision, single receipt / 3-photo album | 4.4 s / 9.9 s, correct | 6-7 s / 12 s, correct |
-| Image tokens for the same receipt | 2,961 | 976 (**kunciai bills ~3x**) |
+| Image tokens for the same receipt | 2,961 | 976 (**provider A bills ~3x**) |
 
-- **Timeouts** (router `timeout: 22`, `num_retries: 0`, vision/kimi-k3 `timeout: 60`, client 60 s / 150 s). Against
-  a deliberately stalling upstream: old settings (45 s, one retry) took **93.3 s** to answer and hit the stalled
-  model twice; new settings **22.9 s**, once. `allowed_fails` alone does not cool a model down after a timeout;
+- **Timeouts** (router `timeout: 22`, `num_retries: 0`, vision and the slow research model `timeout: 60`, client 60 s / 150 s).
+  Against a deliberately stalling upstream: old settings (45 s, one retry) took **93.3 s** to answer and hit the stalled model twice;
+  new settings **22.9 s**, once. `allowed_fails` alone does not cool a model down after a timeout;
   `allowed_fails_policy: {TimeoutErrorAllowedFails: 1}` does (the third call was instant).
-- **Client rpm limiter** (`llm_max_rpm`, now 48; was 24 for Osiris). Cause: a 5-request debate burst exceeded
-  Osiris's 30 rpm, LiteLLM cooled every same-key model down for 60 s and the 429s cascaded. Lower it to ~24 if
-  Osiris ever becomes primary again.
-- **Verified live through the proxy on the new config:** all 6 live tests pass (extraction 1.7-6.8 s, debate
-  commit 3.9 s with 5/5 votes, receipt 10 s, 3-photo album `dual_verified` 14.7 s), and a 90-call unthrottled
-  burst had **90 of 90 succeed**, 48 of them absorbed by the cross-provider fallback after kunciai refused.
-- **Caveats:** kunciai is a reseller (transaction text and receipt photos go to a third party with unknown
-  retention and upstreams; its price is unknown to me, and the image tokens are 3x); samples are small and from
-  one afternoon; kunciai's `glm-5.3` is text-only; `router-mental-health` (glm-5.2) is still a provisional pick.
+- **Client rpm limiter** (`llm_max_rpm`, now 48; was 24 when provider B led). Cause: a 5-request debate burst exceeded provider B's
+  30 rpm, LiteLLM cooled every same-key model down for 60 s and the 429s cascaded. Lower it to ~24 if a provider with that limit
+  ever becomes primary again.
+- **Verified live through the proxy on the new config:** all 6 live tests pass (extraction 1.7-6.8 s, debate commit 3.9 s with 5/5
+  votes, receipt 10 s, 3-photo album `dual_verified` 14.7 s), and a 90-call unthrottled burst had **90 of 90 succeed**, 48 of them
+  absorbed by the cross-provider fallback after provider A refused.
+- **Caveats:** a reseller provider means transaction text and receipt photos go to a third party with unknown retention and
+  upstreams, and its price may be unknown; samples are small and from one afternoon; one model that reads images on provider B is
+  text-only on provider A; the `/private` route is still a provisional pick.
 
-### kunciai.id (OpenAI-compatible reseller): probed 2026-10-24 (now the primary, see above)
+### Evaluating an OpenAI-compatible provider or router (what to check, what was learned)
 
-`https://kunciai.id/v1`, key in `.env` as `KUNCI_API_KEY` (a `sk-live-` key: real money). It lists 88 models,
-a third of them image/video generators. Model ids carry a `kunciai/` prefix (`kunciai/deepseek-v4-flash`).
-Probed with 5-token pings, a JSON-mode request and the drawn receipt (26 calls, ~29k tokens, almost all of
-it the three image requests; a text ping costs 5 tokens, so there is no hidden prompt overhead).
+Probe with 5-token pings, a JSON-mode request and a drawn receipt (a text ping costs about 5 tokens, so there is no hidden prompt
+overhead). One 3-call sample per model on one afternoon is not a reliability measurement.
 
-| Model | Result |
-|---|---|
-| deepseek-v4-flash, deepseek-v4.1-flash, deepseek-v4-pro | ping 1.5-2.6 s, JSON valid. **v4-flash is the model Osiris keeps 502ing on** |
-| glm-5.3, glm-5.2 | ping 1.8-1.9 s, JSON valid |
-| qwen3.8-max, qwen3.8-flash | ping 1.4 s, JSON valid (qwen3.8-max is 502 on Osiris) |
-| glm-5v-turbo | ping 1.2 s, JSON valid but fenced; **read the receipt correctly** (58.300, 2.8 s) |
-| kimi-k2.5 | ping 1.8 s, JSON valid but fenced |
-| claude-haiku-5.5 | works but slow and erratic: ping 27 s, JSON 6.4 s |
-| glm-5.3-flash, kimi-k2.7, kimi-k3 | 502 (an HTML gateway error page) at probe time |
-| **glm-5.3 with an image** | **answered "I can't see the receipt": text-only here**, unlike on Osiris |
-| deepseek-v4-flash-vision-exp | 503 "model sedang riset" |
-
-- **Do not reuse Osiris's vision chain on it.** `glm-5.3` and `glm-5.2` read images on Osiris and glm-5.3 does
-  not on kunciai: capability is per provider, so every model needs its own image test (only glm-5v-turbo
-  passed here).
-- **It would fix real gaps:** a working `deepseek-v4-flash` (the cheap routine primary) and `qwen3.8-max`, and
-  a second provider with its own rate limit. Wired as `model_list` entries with
-  `api_base: os.environ/KUNCI_API_BASE`, `api_key: os.environ/KUNCI_API_KEY` and `model: openai/kunciai/<id>`.
-- **Same caveat as any reseller:** transaction text and receipt photos would go to a third party whose
-  retention and upstreams are unknown to me. Treat it as an allow-listed fallback after you have decided
-  you are comfortable with that, not as a silent default.
-- One 3-call sample per model on one afternoon: latency and 502s are not a reliability measurement.
-
-### 9router (LAN OpenAI-compatible router): evaluated 2026-10-23, **not usable yet**
-
-`http://192.168.1.20:20128/v1` is reachable and accepts the key (`ROUTER9_API_BASE` /
-`ROUTER9_API_KEY` in `.env`; a keyless template is in `.env.example`). It catalogues 824 model ids from
-83 provider prefixes, but **no provider answers**: one representative model per prefix was pinged and
-81 returned `404 No active credentials for provider: <name>`, `mmf` returned 401 invalid token, and `oc`
-returned unsupported / deprecated / unavailable. The listing cannot tell live from dead (`?active=true`
-is ignored, `/health` and `/providers` are not API routes), so a catalogue entry means nothing.
-Credentials have to be added on the router itself; re-probe after that.
-
-How to wire it in once something works (not done: there is nothing to wire):
-- LiteLLM deployments can each carry their own `api_base`, so a router model is one more
-  `model_list` entry with `api_base: os.environ/ROUTER9_API_BASE`, `api_key: os.environ/ROUTER9_API_KEY`
-  and `model: openai/<provider>/<id>` (e.g. `openai/deepseek/deepseek-v4-flash`), then added to a
-  `fallbacks` chain. `tests/test_litellm_config.py` currently asserts every deployment uses the Osiris
-  env vars; that assertion must be relaxed deliberately, not silently.
-- It is a second provider and a second rate limit, so it genuinely adds failover for outages and for
-  Osiris's burst throttling, if its upstreams are healthy.
-
-**Decide this before routing real data through it.** The transaction text, merchant names, amounts and
-(later) meal photos and biometrics would travel to whichever upstream the router picks, and the
-blueprint's premise is that sensitive data stays on licensed models. A router that fans out to 80
-providers, some of which are consumer-account style (`grok-web`, `perplexity-web`, `cc`, `kr`) or free
-tiers with unknown retention, breaks that premise unless the config is restricted to a short allow-list
-of providers you have vetted. Treat it as an allow-listed fallback, never as "any model".
+- **Capability is per provider.** A model that reads images on one provider can be text-only on another (it answered "I can't see the
+  receipt"), so every model needs its own image test; do not reuse one provider's vision chain on another.
+- **Fenced JSON is handled** (the parser strips code fences), but a model that is slow or erratic (a ping of 27 s) is not worth
+  a place in a chain, and a model returning an HTML gateway error page (502/503) at probe time is left out.
+- **A catalogue is not a service.** A LAN router listed 824 model ids from 83 provider prefixes, but none answered: the sample pings
+  returned `404 No active credentials`, 401 or "unavailable", and the listing cannot tell live from dead. Credentials have to be added
+  on the router itself; re-probe after that.
+- **Wiring one in:** LiteLLM deployments can each carry their own `api_base`, so a new provider is one more `model_list` entry with its
+  base address and key read from the environment, added to a `fallbacks` chain. `tests/test_litellm_config.py` asserts every
+  deployment reads its provider's environment variables; relax that deliberately, not silently.
+- **Decide privacy before routing real data through it.** Transaction text, merchant names, amounts and (later) meal photos and
+  biometrics travel to whichever upstream the router picks, and the blueprint's premise is that sensitive data stays on licensed
+  models. A router that fans out to many providers, some of them consumer-account style or free tiers with unknown retention, breaks
+  that premise unless the config is restricted to a short allow-list of providers you have vetted. Treat a reseller or a router as an
+  allow-listed fallback after you decided you are comfortable with that, never as "any model".
 
 ### D2 addendum: LLM extraction fallback (`needs_llm` events)
 

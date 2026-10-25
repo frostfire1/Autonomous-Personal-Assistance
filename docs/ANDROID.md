@@ -31,7 +31,7 @@ artifact).
 
 ## Install
 
-1. Phone: enable Developer options and USB debugging, connect it, then `adb install -r app-debug.apk`. Xiaomi/Redmi phones also
+1. Phone: enable Developer options and USB debugging, connect it, then `adb install -r app-debug.apk`. Some phones also
    need "Install via USB" in Developer options. Or copy the APK to the phone and open it (allow installs from that source).
 2. Open **APA**. Under *Server*, enter your server address (for example `http://192.168.1.10:8000`, or your VPN address) and
    the `INGEST_API_KEY`, then press **Save server & test connection**. It should say "Connected".
@@ -41,7 +41,7 @@ artifact).
 
 ## Keep it working in the background
 
-Some phones (Xiaomi, Oppo, Vivo, Huawei, Samsung) freeze apps that are closed. The settings screen has a checklist with a tick or a cross
+Some phones freeze apps that are closed. The settings screen has a checklist with a tick or a cross
 for each requirement and buttons for: switching battery optimisation off for APA, opening your maker's autostart screen,
 re-binding the notification listener, the resend interval (15 to 120 minutes) and "Wi-Fi only". Nothing is lost while the phone
 is offline or frozen: the buffer waits and is resent with the same idempotency keys.
@@ -57,8 +57,8 @@ be reached. The queue survives a restart of the app or the phone, and a resend i
 After a failed attempt the app tries again every 5 minutes, and immediately when the phone's network or VPN connects again. The settings
 screen shows how many notifications are waiting and has a **Send queued notifications now** button.
 
-Tips so the VPN does not drop quietly: keep Tailscale on **always**, exclude Tailscale from battery optimisation (and on Xiaomi switch its
-Autostart on too), and use the same server address on and off the home network by using the Tailscale name instead of the `192.168.x.x` address.
+Tips so the VPN does not drop quietly: keep Tailscale on **always**, exclude Tailscale from battery optimisation (and switch its
+Autostart on if your phone has one), and use the same server address on and off the home network by using the Tailscale name instead of the `192.168.x.x` address.
 If the phone has not reached the server for 2 hours (`PHONE_SILENT_HOURS`), the server tells you in Telegram (the message comes from the server, so it works even though the phone is cut off).
 
 ## When something is not recorded, Telegram tells you
@@ -68,7 +68,7 @@ If the phone has not reached the server for 2 hours (`PHONE_SILENT_HOURS`), the 
   failures) is not reported. At most 6 such messages an hour.
 - **The phone stops collecting:** the app checks in with the server (every sync, and whenever you open it). If it has been silent for 2
   hours (`PHONE_SILENT_HOURS` in `.env`), or its notification listener is disconnected, Telegram says so (at most once per 12 hours). The app also tries to re-link the
-  listener itself. On Xiaomi, Oppo, Vivo and similar phones the usual fix is to switch **Autostart** on for APA and set battery to
+  listener itself. On phones with an autostart screen the usual fix is to switch **Autostart** on for APA and set battery to
   **No restrictions**; the settings screen has buttons for both.
 
 ## Security
