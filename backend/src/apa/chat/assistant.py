@@ -119,11 +119,14 @@ async def _context(sm, tz: ZoneInfo, now: datetime, history_block: str, reply_to
     learned_block = ""  # learned items are part of the card
     shared = await assistant_memory.shared_journal(sm, 5)
     shared_block = ("DIARY ENTRIES THE OWNER CHOSE TO SHARE WITH YOU:\n" + "\n".join(f"{e['date']}: {e['text']}" for e in shared)[-1500:] + "\n") if shared else ""
+    from apa import mcp_client
+
+    skills = mcp_client.catalog(await mcp_client.current(sm))
     notes = await assistant_memory.load(sm)
     remembered = ("WHAT YOU REMEMBER about the owner (their own notes):\n" + "\n".join(f"{i}. {n}" for i, n in enumerate(notes, 1)) + "\n") if notes else ""
     style_block = "HOW TO WRITE TO THE OWNER:\n" + await profile.style_guide(sm) + "\n"
     return (
-        f"Now: {now:%A %d/%m/%Y %H:%M} ({tz})\n{style_block}{profile_block}{remembered}{learned_block}{shared_block}{diary_block}{replied}Recent chat:\n{history_block}\n\n<DATA>\n{facts[:CONTEXT_CHARS]}\n</DATA>"
+        f"Now: {now:%A %d/%m/%Y %H:%M} ({tz})\n{style_block}{profile_block}{remembered}{learned_block}{shared_block}{diary_block}{skills + chr(10) if skills else ""}{replied}Recent chat:\n{history_block}\n\n<DATA>\n{facts[:CONTEXT_CHARS]}\n</DATA>"
     )
 
 
@@ -158,6 +161,15 @@ async def converse(
             result = await run_read(sm, tz, now, name, args)
             log.info("assistant_lookup", tool=name)
             transcript += [f"TOOL {name} {json.dumps(args, ensure_ascii=False)[:200]}", f"RESULT:\n{result}"]
+            continue
+        if name == "mcp" and not final:
+            from apa import mcp_client
+
+            kind, text = await mcp_client.invoke(sm, redis, args)
+            log.info("assistant_skill", kind=kind)
+            if kind == "card":  # the owner must confirm first: the card is the whole reply
+                return text[:MAX_REPLY], tokens
+            transcript += [f"TOOL mcp {json.dumps(args, ensure_ascii=False)[:200]}", f"RESULT:\n{text}"]
             continue
         if name == "gif" and not final:
             from apa import gif

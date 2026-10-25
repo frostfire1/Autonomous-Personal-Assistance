@@ -69,6 +69,11 @@ class Settings(BaseSettings):
     care_checkins: bool = True
     # The assistant starts a chat now and then (morning, midday, evening) and stops if not answered
     companion_chats: bool = True
+    # An MCP server for your dataset at /mcp (read-only, dashboard key); money tools need expose_finance
+    mcp_enabled: bool = False
+    mcp_expose_finance: bool = False
+    # Skills: MCP servers the owner connects on the dashboard; the most calls a day
+    mcp_calls_per_day: int = 30
     # GIF reactions in the chat (one of these keys switches it on): developers.giphy.com or Tenor
     giphy_api_key: str = ""
     tenor_api_key: str = ""

@@ -35,7 +35,8 @@ For the phone: build or download the APK and follow [docs/ANDROID.md](docs/ANDRO
 | [docs/CONFIG.md](docs/CONFIG.md) | what the defaults are, what is changeable where, every `.env` variable, dummy examples |
 | [docs/SECURITY.md](docs/SECURITY.md) | what is encrypted and private (the diary), what the AI sees, and what is not protected |
 - [App usage with ActivityWatch, observations and chat retention](docs/ACTIVITYWATCH.md)
-- [The dataset about you: About me, comfort settings, export for a model](docs/DATASET.md)
+- [The dataset about you: About me, comfort settings, export for a model](docs/DATASET.md)
+- [Skills: MCP servers the assistant can use, and your data as an MCP server](docs/SKILLS.md)
 | [docs/ANDROID.md](docs/ANDROID.md) | build the APK, install, connect, permissions, background use |
 | [docs/decisions.md](docs/decisions.md) | architecture decisions and differences from the blueprint |
 

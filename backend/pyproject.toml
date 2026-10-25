@@ -30,6 +30,7 @@ dependencies = [
 # Heavy or native deps kept out of the base install
 voice = ["faster-whisper>=1.1"]
 research = ["trafilatura>=2.0"]
+mcp = ["mcp>=2,<3"]
 dev = ["pytest>=8", "pytest-asyncio>=0.24", "ruff>=0.8", "mypy>=1.13", "pyyaml>=6"]
 
 [build-system]
@@ -78,6 +79,8 @@ ignore = ["B008"]  # FastAPI Depends() in defaults is the framework idiom
 "src/apa/about.py" = ["E501"]
 "src/apa/research.py" = ["E501"]
 "src/apa/gif.py" = ["E501"]
+"src/apa/mcp_server.py" = ["E501"]
+"src/apa/mcp_client.py" = ["E501"]
 "src/apa/natural.py" = ["E501"]
 "src/apa/integrations/notify.py" = ["E501"]
 "src/apa/companion.py" = ["E501"]

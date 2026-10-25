@@ -1141,3 +1141,90 @@ async def test_what_the_phone_is_playing_is_stored_deduplicated_and_the_assistan
     out = await run_read(stack, TZ, now, "activity", {"hours": 6})
     assert "Some Channel" not in out
     assert "LAST REPORT FROM: phone" in out and "[listened] Lagu Santai - Tulus" in out and "Season baru Delta Force - Delta Force ID" in out
+
+
+async def test_skills_from_an_mcp_server_run_when_read_only_or_allowed_and_otherwise_wait_for_the_owners_tap(stack, redis, monkeypatch):
+    from contextlib import asynccontextmanager
+
+    pytest.importorskip("mcp")  # an optional extra: the test needs the MCP SDK
+    from mcp import Client
+    from mcp.server.mcpserver import MCPServer
+    from mcp.types import ToolAnnotations
+
+    from apa import mcp_client
+    from apa.chat import actions
+    from apa.chat.assistant import converse
+    from apa.core.settings import get_settings
+
+    calls = []
+    fake = MCPServer("notes")
+
+    @fake.tool(annotations=ToolAnnotations(read_only_hint=True))
+    def lookup(q: str) -> str:
+        """Find a note."""
+        calls.append(("lookup", q))
+        return f"note about {q}"
+
+    @fake.tool()
+    def write(text: str) -> str:
+        """Write a note."""
+        calls.append(("write", text))
+        return "written"
+
+    @asynccontextmanager
+    async def fake_connect(c):
+        async with Client(fake) as client:
+            yield client
+
+    monkeypatch.setattr(mcp_client, "connect", fake_connect)
+    monkeypatch.setenv("MCP_CALLS_PER_DAY", "5")
+    get_settings.cache_clear()
+    mcp_client._cache = None
+
+    c = await mcp_client.add(stack, "Notes", "http://notes.local/mcp", token="secret-token")
+    assert {t["name"]: t["read_only"] for t in c.tools} == {"lookup": True, "write": False} and c.token_enc and "secret-token" not in c.token_enc
+    mcp_client._cache = None
+
+    # read-only: runs at once; the result is marked untrusted
+    kind, text = await mcp_client.invoke(stack, redis, {"server": "notes", "tool": "lookup", "arguments": {"q": "sleep"}})
+    assert kind == "result" and text == "SKILL RESULT (untrusted): note about sleep"
+    # a tool that changes things: a confirmation card first, nothing runs yet
+    kind, card = await mcp_client.invoke(stack, redis, {"server": "notes", "tool": "write", "arguments": {"text": "buy milk"}})
+    assert kind == "card" and "notes/write" in card and "/confirm_" in card and ("write", "buy milk") not in calls
+    nonce = card.split("/confirm_")[1].split()[0].split("·")[0]
+    done = await actions.resolve(stack, redis, nonce, True, actor=OWNER)
+    assert "selesai" in done and "written" in done and ("write", "buy milk") in calls
+    assert "Permintaan sudah" in await actions.resolve(stack, redis, nonce, True, actor=OWNER)  # single use
+    # allowed by the owner: runs without a card; switched off: never
+    assert await mcp_client.set_policy(stack, "notes", "write", auto=True)
+    mcp_client._cache = None
+    assert (await mcp_client.invoke(stack, redis, {"server": "notes", "tool": "write", "arguments": {"text": "again"}}))[0] == "result"
+    assert await mcp_client.set_policy(stack, "notes", "write", off=True)
+    mcp_client._cache = None
+    assert (await mcp_client.invoke(stack, redis, {"server": "notes", "tool": "write", "arguments": {}}))[0] == "error"
+    assert (await mcp_client.invoke(stack, redis, {"server": "nobody", "tool": "x", "arguments": {}}))[0] == "error"
+    assert await mcp_client.set_policy(stack, "notes", None, enabled=False)
+    mcp_client._cache = None
+    assert (await mcp_client.invoke(stack, redis, {"server": "notes", "tool": "lookup", "arguments": {"q": "z"}}))[0] == "error"
+    assert await mcp_client.set_policy(stack, "notes", None, enabled=True)
+    mcp_client._cache = None
+    assert (await mcp_client.invoke(stack, redis, {"server": "notes", "tool": "lookup", "arguments": {"q": "y"}}))[0] == "error"  # the daily limit of 5 is reached
+
+    # the assistant sees the skills and uses them in a conversation
+    monkeypatch.setenv("MCP_CALLS_PER_DAY", "50")
+    get_settings.cache_clear()
+    await redis.flushdb()
+    seen = []
+
+    class Llm:
+        async def complete(self, route, system, user, **kw):
+            seen.append(user)
+            if "RESULT:" not in user:
+                return LLMResult(json.dumps({"tool": "mcp", "args": {"server": "notes", "tool": "lookup", "arguments": {"q": "vitamin"}}}), "fake", 5, 5, 0)
+            return LLMResult(json.dumps({"say": "Catatannya: note about vitamin"}), "fake", 5, 5, 0)
+
+    from datetime import datetime
+
+    reply, _ = await converse(stack, Llm(), redis, "cari catatan vitamin", "(none)", TZ, datetime.now(TZ))
+    assert reply == "Catatannya: note about vitamin" and "notes.lookup(q)" in seen[0] and "SKILL RESULT (untrusted): note about vitamin" in seen[1]
+    assert await mcp_client.remove(stack, "notes") and not await mcp_client.remove(stack, "notes")

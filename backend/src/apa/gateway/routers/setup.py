@@ -331,6 +331,57 @@ async def profile_content(request: Request) -> dict:
     return {"result": await content.digest(SessionLocal, request.app.state.llm, today, force=True)}
 
 
+@router.get("/skills")
+async def skills_list() -> dict:
+    """The MCP servers the owner connected (skills of the assistant), with their tools; tokens are never returned."""
+    from apa import mcp_client
+
+    return {"servers": [mcp_client.public(c) for c in await mcp_client.load(SessionLocal)], "mcp_server_on": get_settings().mcp_enabled}
+
+
+@router.post("/skills")
+async def skills_add(name: str = Body(max_length=40), url: str = Body(max_length=300), token: str = Body(default="", max_length=2000),
+                     header: str = Body(default="Authorization", max_length=40)) -> dict:
+    """Connect an MCP server (Streamable HTTP): its tools are listed and cached. A server that cannot be reached is not kept."""
+    from apa import mcp_client
+
+    try:
+        c = await mcp_client.add(SessionLocal, name, url, token, header)
+    except mcp_client.McpError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from None
+    return mcp_client.public(c)
+
+
+@router.post("/skills/{server_id}/refresh")
+async def skills_refresh(server_id: str) -> dict:
+    from apa import mcp_client
+
+    try:
+        return mcp_client.public(await mcp_client.refresh(SessionLocal, server_id))
+    except mcp_client.McpError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from None
+
+
+@router.put("/skills/{server_id}")
+async def skills_policy(server_id: str, enabled: bool | None = Body(default=None), tool: str | None = Body(default=None, max_length=80),
+                        auto: bool | None = Body(default=None), off: bool | None = Body(default=None)) -> dict:
+    """Switch a server on or off, or set a tool: `auto` = runs without asking, `off` = never runs."""
+    from apa import mcp_client
+
+    if not await mcp_client.set_policy(SessionLocal, server_id, tool, auto=auto, off=off, enabled=enabled):
+        raise HTTPException(status_code=404, detail="no such server or tool")
+    return {"ok": True}
+
+
+@router.delete("/skills/{server_id}")
+async def skills_remove(server_id: str) -> dict:
+    from apa import mcp_client
+
+    if not await mcp_client.remove(SessionLocal, server_id):
+        raise HTTPException(status_code=404, detail="no such server")
+    return {"ok": True}
+
+
 @router.get("/about")
 async def about_card() -> dict:
     """The whole dataset about the owner, grouped by domain, for the About me page."""

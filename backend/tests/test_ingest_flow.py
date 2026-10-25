@@ -962,3 +962,68 @@ def test_windows_process_names_become_app_names():
 
     assert usage.pretty("msedge.exe") == "Microsoft Edge" and usage.pretty("discord.exe") == "Discord" and usage.pretty("Mobile Legends") == "Mobile Legends"
     assert usage.pretty("claude.EXE") == "Claude" and usage.category(usage.pretty("discord.exe")) == "messaging"
+
+
+# ---- MCP: the server for your dataset and the skills the assistant can use ----------------------------------------------------------
+
+
+def test_the_mcp_key_is_checked_as_a_header_or_a_bearer_token():
+    from apa import mcp_server
+
+    assert mcp_server.authorised({b"x-api-key": b"k"}, "k") and mcp_server.authorised({b"authorization": b"Bearer k"}, "k")
+    assert not mcp_server.authorised({b"x-api-key": b"wrong"}, "k") and not mcp_server.authorised({}, "k") and not mcp_server.authorised({b"x-api-key": b""}, "")
+
+
+def test_the_mcp_gate_refuses_requests_without_the_key_and_maps_the_path():
+    import asyncio
+
+    from httpx import ASGITransport, AsyncClient
+
+    from apa import mcp_server
+    from apa.core.settings import get_settings
+
+    seen = []
+
+    async def inner(scope, receive, send):
+        seen.append(scope["path"])
+        await send({"type": "http.response.start", "status": 200, "headers": []})
+        await send({"type": "http.response.body", "body": b"ok"})
+
+    import os
+
+    os.environ["INGEST_API_KEY"] = "gate-key"
+    get_settings.cache_clear()
+
+    async def go():
+        async with AsyncClient(transport=ASGITransport(app=mcp_server.Gate(inner)), base_url="http://t") as c:
+            assert (await c.post("/mcp")).status_code == 401
+            assert (await c.post("/mcp", headers={"x-api-key": "bad"})).status_code == 401
+            assert (await c.post("/mcp", headers={"x-api-key": "gate-key"})).status_code == 200
+            assert (await c.post("/mcp", headers={"authorization": "Bearer gate-key"})).status_code == 200
+
+    try:
+        asyncio.run(go())
+    finally:
+        os.environ.pop("INGEST_API_KEY", None)
+        get_settings.cache_clear()
+    assert seen == ["/", "/"]
+
+
+def test_skill_servers_are_listed_for_the_assistant_without_the_switched_off_ones():
+    import pytest
+
+    from apa import mcp_client
+
+    assert mcp_client.slug("My Notes!") == "my_notes"
+    for bad in ("ftp://x/mcp", "http://169.254.169.254/latest", "not a url"):
+        with pytest.raises(mcp_client.McpError):
+            mcp_client.check_url(bad)
+    assert mcp_client.check_url("http://192.168.1.5:9000/mcp") == "http://192.168.1.5:9000/mcp"
+    tools = [{"name": "lookup", "description": "Find a note", "args": ["q"], "read_only": True},
+             {"name": "write", "description": "Write a note", "args": ["text"], "read_only": False},
+             {"name": "wipe", "description": "Delete all", "args": [], "read_only": False}]
+    c = mcp_client.ServerCfg(id="notes", name="Notes", url="http://x/mcp", tools=tools, off=["wipe"], auto=[])
+    text = mcp_client.catalog([c])
+    assert "notes.lookup(q): Find a note" in text and "notes.write(text) [asks the owner first]: Write a note" in text and "wipe" not in text
+    assert mcp_client.catalog([c.model_copy(update={"enabled": False})]) == "" and mcp_client.catalog([]) == ""
+    assert "token" not in mcp_client.public(c.model_copy(update={"token_enc": "x"})) and mcp_client.public(c.model_copy(update={"token_enc": "x"}))["has_token"]

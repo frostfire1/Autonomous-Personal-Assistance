@@ -101,7 +101,15 @@ TOOLS: dict[str, type[_Args]] = {  # the only tools a model may propose
     "edit_transaction": EditTransaction,
     "set_budget": SetBudget,
 }
-INTERNAL_TOOLS: dict[str, type[_Args]] = {"record_batch": RecordBatch}  # built by code, confirmed by the owner
+class McpCall(_Args):
+    """Internal: a skill (a tool of a connected MCP server) that the owner is asked to confirm. Built by code, never proposed by the model."""
+
+    server: str = Field(min_length=2, max_length=24)
+    tool: str = Field(min_length=1, max_length=80)
+    arguments: dict = Field(default_factory=dict)
+
+
+INTERNAL_TOOLS: dict[str, type[_Args]] = {"record_batch": RecordBatch, "mcp_call": McpCall}  # built by code, confirmed by the owner
 
 TOOL_SPEC = """Tools (reply with exactly one):
 - add_transaction {"amount": number (rupiah), "merchant": string, "direction": "out"|"in", "wallet": "cash_wallet"|"gopay"|"ovo"|"dana"|"bank_bca"|... (optional), "note": string (optional)}
@@ -162,6 +170,9 @@ async def describe(sm: async_sessionmaker, tool: str, a: _Args) -> str:
         return f"Catat {sign} baru: {a.merchant} · {rupiah(a.amount)} · dompet {a.wallet}" + (
             f" · «{a.note}»" if a.note else ""
         )
+    if isinstance(a, McpCall):
+        shown = json.dumps(a.arguments, ensure_ascii=False)
+        return f"Jalankan skill «{a.server}/{a.tool}»" + (f" dengan: {shown[:220]}" if a.arguments else "")
     if isinstance(a, RecordBatch):
         total = sum((i.amount for i in a.items if i.direction == "out"), Decimal(0))
         return f"Catat {len(a.items)} pembayaran sekaligus (keluar {rupiah(total)})"
@@ -218,6 +229,17 @@ async def propose(sm: async_sessionmaker, redis: Any, raw_call: str) -> str:
     if isinstance(parsed, str):
         return parsed
     tool, args = parsed
+    return await _propose_validated(sm, redis, tool, args)
+
+
+async def propose_internal(sm: async_sessionmaker, redis: Any, tool: str, args: dict) -> str:
+    """A confirmation card for an action that code (not the model's own wording) built, for example a skill call."""
+    if tool not in INTERNAL_TOOLS:
+        return "Maaf, saya belum bisa melakukan itu."
+    return await _propose_validated(sm, redis, tool, args)
+
+
+async def _propose_validated(sm: async_sessionmaker, redis: Any, tool: str, args: dict) -> str:
     try:
         a = _validate(tool, args)
         card = await describe(sm, tool, a)
@@ -432,7 +454,18 @@ async def _exec_budget(sm, redis, a: SetBudget, nonce: str, tz: ZoneInfo) -> str
     return f"💰 Anggaran {cat} bulan ini: {rupiah(a.monthly_limit)}"
 
 
+async def _exec_mcp(sm, redis, a: McpCall, nonce: str, tz: ZoneInfo) -> str:
+    from apa import mcp_client
+
+    try:
+        text = await mcp_client.run(sm, a.server, a.tool, a.arguments)
+    except mcp_client.McpError as e:
+        return f"⚠️ {e}"
+    return f"✅ Skill «{a.server}/{a.tool}» selesai:\n{text[:1500]}"
+
+
 _EXEC = {
+    "mcp_call": _exec_mcp,
     "record_batch": _exec_batch,
     "add_transaction": _exec_add,
     "undo_transaction": _exec_undo,
