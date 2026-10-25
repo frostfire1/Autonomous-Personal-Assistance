@@ -420,7 +420,7 @@ def test_the_read_tools_validate_their_arguments_and_say_what_is_wrong():
     from apa.chat.tools import READ_TOOLS, run_read
 
     now, tz = datetime.now(UTC), ZoneInfo("Asia/Jakarta")
-    assert {"transactions", "spending", "budgets", "balances", "sleep", "cve", "news", "recall", "profile"} == set(READ_TOOLS)
+    assert {"transactions", "spending", "budgets", "balances", "sleep", "cve", "news", "recall", "profile", "activity"} == set(READ_TOOLS)
     for name, args in (("transactions", {"days": 9999}), ("spending", {"period": "decade"}), ("sleep", {"days": 0}),
                        ("news", {"limit": 99}), ("transactions", {"drop": "table"})):
         assert asyncio.run(run_read(None, tz, now, name, args)).startswith("Bad arguments")

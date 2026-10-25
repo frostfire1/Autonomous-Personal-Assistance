@@ -23,7 +23,10 @@ object UsagePush {
     private const val EVERY_MS = 30L * 60 * 1000
     private val http = OkHttpClient.Builder().connectTimeout(2, TimeUnit.SECONDS).readTimeout(15, TimeUnit.SECONDS).build()
 
-    class Day(val apps: Map<String, Long>, val first: Pair<String, Instant>?, val last: Pair<String, Instant>?)
+    class Day(
+        val apps: Map<String, Long>, val first: Pair<String, Instant>?, val last: Pair<String, Instant>?,
+        val firsts: Map<String, Instant> = emptyMap(), val lasts: Map<String, Instant> = emptyMap(),
+    )
 
     private fun get(path: String, key: String): String? = runCatching {
         val req = Request.Builder().url("$AW$path").apply { if (key.isNotBlank()) header("Authorization", "Bearer $key") }.build()
@@ -53,8 +56,8 @@ object UsagePush {
         val apps = JSONArray()
         d.apps.entries.sortedByDescending { it.value }.take(300).forEach { (app, secs) ->
             val o = JSONObject().put("app", app.take(120)).put("seconds", secs.coerceAtMost(86400))
-            d.first?.takeIf { it.first == app }?.let { o.put("first_at", it.second.toString()) }
-            d.last?.takeIf { it.first == app }?.let { o.put("last_at", it.second.toString()) }
+            (d.firsts[app] ?: d.first?.takeIf { it.first == app }?.second)?.let { o.put("first_at", it.toString()) }  // when each app was first and last used
+            (d.lasts[app] ?: d.last?.takeIf { it.first == app }?.second)?.let { o.put("last_at", it.toString()) }
             apps.put(o)
         }
         return JSONObject().put("device", Build.MODEL.take(40)).put("kind", "android").put("day", day.toString()).put("apps", apps)

@@ -18,6 +18,7 @@ import androidx.work.WorkerParameters
 import id.frostfire.apa.core.Api
 import id.frostfire.apa.core.Config
 import id.frostfire.apa.data.Outbox
+import id.frostfire.apa.listener.MediaCapture
 import id.frostfire.apa.usage.UsagePush
 import java.util.concurrent.TimeUnit
 
@@ -35,6 +36,7 @@ class SyncWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(ctx, 
             }.getOrNull() ?: "0.2.0"
             api.heartbeat(cfg.listenerUp, outbox.pendingCount(), version)
         }
+        runCatching { MediaCapture.flush(applicationContext, api) }
         runCatching { UsagePush.run(applicationContext, cfg, api) }.onFailure { android.util.Log.w("APA-usage", "failed: $it") }  // app usage from ActivityWatch, if it is installed
         for (row in outbox.pending()) {
             val r = try {

@@ -27,6 +27,7 @@ class BankNotificationListener : NotificationListenerService() {
 
     override fun onNotificationPosted(sbn: StatusBarNotification) {
         val pkg = sbn.packageName
+        if (runCatching { MediaCapture.handle(this, sbn) }.getOrDefault(false)) return  // a media player: remember what is playing
         val picked = Config(this).pickedPackages
         if (pkg !in NotificationFilter.PACKAGES && pkg !in picked) return
         val extras = sbn.notification.extras

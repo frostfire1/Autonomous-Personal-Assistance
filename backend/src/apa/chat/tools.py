@@ -62,6 +62,10 @@ class RecallQ(_A):
     limit: int = Field(default=8, ge=1, le=15)
 
 
+class ActivityQ(_A):
+    hours: int = Field(default=24, ge=1, le=72)
+
+
 class NoArgs(_A):
     pass
 
@@ -76,6 +80,7 @@ READ_TOOLS: dict[str, type[_A]] = {
     "news": NewsQ,
     "recall": RecallQ,
     "profile": NoArgs,
+    "activity": ActivityQ,
 }
 
 # what the model is told about the read tools (the write tools are described by chat.actions.TOOL_SPEC)
@@ -88,6 +93,7 @@ READ_TOOL_DOC = """Look-up tools (read only; call one, you get the result, then 
 - cve {"limit": 1-10 (5)}  the newest high or critical vulnerabilities with the technology and versions
 - news {"topic": "nasional"|"cyber"|a topic id (nasional), "limit": 1-10 (5)}
 - recall {"query": string? (a word or phrase), "days": 1-365 (30), "limit": 1-15 (8)}  search your diary, what you learned and the chat history of earlier days
+- activity {"hours": 1-72 (24)}  the apps the owner used most recently (phone and computer) with when they last used each, and the latest things they watched or listened to
 - profile {}  the owner's patterns computed from their data: sleep, when they are active, what and when they eat, spending, steps, stress, interests"""
 
 
@@ -239,6 +245,33 @@ async def _recall(sm, tz, now, a: RecallQ) -> str:
     return "\n".join(parts) or "Nothing found in the diary or the chat history."
 
 
+async def _activity(sm, tz, now, a: ActivityQ) -> str:
+    from apa import assistant_memory, usage
+
+    rows = await usage.recent(sm, 2, now.date())
+    if not rows:
+        return "No app usage has been reported yet (the phone app or the computer script must send it)."
+    cutoff = now - timedelta(hours=a.hours)
+    used = sorted((r for r in rows if r.last_at and r.last_at >= cutoff), key=lambda r: r.last_at, reverse=True)
+    parts = []
+    if used:
+        parts.append(f"APPS USED IN THE LAST {a.hours} H, most recent first (local time):\n" + "\n".join(
+            f"- {r.app} on {r.device}: used until {r.last_at.astimezone(tz):%d/%m %H:%M}"
+            f"{', started ' + format(r.first_at.astimezone(tz), '%H:%M') if r.first_at else ''}, {round(r.seconds / 60)} min that day" for r in used[:10]))
+    else:
+        parts.append("No app has a recorded time in that window (older data has no timestamps, or nothing was used).")
+    seen: dict[str, datetime] = {}
+    for r in rows:
+        seen[r.device] = max(seen.get(r.device, r.updated_at), r.updated_at)
+    parts.append("LAST REPORT FROM: " + ", ".join(f"{d} at {t.astimezone(tz):%d/%m %H:%M}" for d, t in seen.items())
+                 + " (devices report about every 30 minutes, so the last minutes may be missing)")
+    items = [w for w in await assistant_memory.watched(sm, 3, now.date())][-6:]
+    if items:
+        parts.append("LATEST CONTENT (YouTube, music; newest last):\n" + "\n".join(
+            f"- [{w['k']}] {w.get('t', '')} - {w.get('c', '')} ({w['date']:%d/%m}{' ' + w['at'] if w.get('at') else ''})" for w in items))
+    return "\n".join(parts)
+
+
 async def _profile(sm, tz, now, a: NoArgs) -> str:
     from apa import profile
 
@@ -250,6 +283,7 @@ async def _profile(sm, tz, now, a: NoArgs) -> str:
 
 _RUN = {
     "recall": _recall,
+    "activity": _activity,
     "profile": _profile,
     "transactions": _transactions, "spending": _spending, "budgets": _budgets, "balances": _balances,
     "sleep": _sleep, "cve": _cve, "news": _news,

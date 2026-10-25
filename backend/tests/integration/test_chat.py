@@ -1107,3 +1107,32 @@ async def test_the_diary_is_written_automatically_an_edit_is_kept_and_a_deleted_
     # deleting a day removes it from everything, and the night job does not bring it back
     assert await mem.delete_day(stack, day) and await mem.days(stack, 5, day) == []
     assert not await daily.build_day(stack, Llm(), TZ, day) and await mem.days(stack, 5, day) == [] and not await mem.delete_day(stack, date(2001, 1, 1))
+
+
+async def test_what_the_phone_is_playing_is_stored_deduplicated_and_the_assistant_can_look_up_the_last_app_and_content(stack):
+    from datetime import datetime, timedelta
+
+    from apa import assistant_memory as mem
+    from apa import usage
+    from apa.chat.tools import run_read
+
+    now = datetime.now(TZ)
+    day = now.date()
+    t1 = now - timedelta(minutes=50)
+    await usage.store(stack, "phone", "android", day, [
+        {"app": "Mobile Legends", "seconds": 5400, "first_at": t1.astimezone(UTC) - timedelta(hours=2), "last_at": t1.astimezone(UTC)},
+        {"app": "Telegram", "seconds": 600, "first_at": (now - timedelta(hours=1)).astimezone(UTC), "last_at": (now - timedelta(minutes=5)).astimezone(UTC)}])
+    items = [{"app": "YouTube", "title": "Season baru Delta Force", "artist": "Delta Force ID", "at": now - timedelta(minutes=30)},
+             {"app": "YouTube", "title": "Season baru Delta Force", "artist": "Delta Force ID", "at": now - timedelta(minutes=28)},  # the same video, updated
+             {"app": "Spotify", "title": "Lagu Santai", "artist": "Tulus", "at": now - timedelta(minutes=10)},
+             {"app": "Spotify", "title": "x", "artist": "", "at": now}]  # a one-letter title is dropped
+    assert await mem.add_playing(stack, items, TZ) == 2
+    assert await mem.add_playing(stack, items, TZ) == 0  # sent again (a retry): nothing doubles
+    await mem.add_watch(stack, {day: [{"k": "watched", "c": "Dapur Ani", "t": "Resep"}]})  # an import never wipes what the phone reported
+    got = await mem.watched(stack, 1, day)
+    assert sorted((w["k"], w["t"]) for w in got) == [("listened", "Lagu Santai"), ("watched", "Resep"), ("watched", "Season baru Delta Force")]
+
+    out = await run_read(stack, TZ, now, "activity", {"hours": 6})
+    lines = out.splitlines()
+    assert lines[1].startswith("- Telegram on phone: used until") and lines[2].startswith("- Mobile Legends on phone")  # most recent first
+    assert "LAST REPORT FROM: phone" in out and "[listened] Lagu Santai - Tulus" in out and "Season baru Delta Force - Delta Force ID" in out

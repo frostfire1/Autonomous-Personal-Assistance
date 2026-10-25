@@ -298,8 +298,8 @@ async def add_watch(sm: async_sessionmaker, by_day: dict[date, list[dict]]) -> i
     """Store the imported items; every day in the import is replaced (importing again does not double). -> items stored."""
     rows = [_row(WATCH, json.dumps(i, ensure_ascii=False), day=d, source="import", shared=False) for d, items in by_day.items() for i in items]
     async with sm() as s:
-        if by_day:
-            await s.execute(delete(MemoryItem).where(MemoryItem.kind == WATCH, MemoryItem.day.in_(list(by_day))))
+        if by_day:  # only what an earlier import wrote: items the phone reported or the account sync stored are not touched
+            await s.execute(delete(MemoryItem).where(MemoryItem.kind == WATCH, MemoryItem.source == "import", MemoryItem.day.in_(list(by_day))))
         s.add_all(rows)
         await s.commit()
     return len(rows)
@@ -359,6 +359,34 @@ async def search_days(sm: async_sessionmaker, query: str | None, n: int = 60, li
         return snaps[-limit:]
     scored = sorted(((_score(json.dumps(d, ensure_ascii=False).lower(), words), d["date"], d) for d in snaps), key=lambda x: (x[0], x[1]), reverse=True)
     return [d for sc, _, d in scored if sc][:limit]
+
+
+async def add_playing(sm: async_sessionmaker, items: list[dict], tz: ZoneInfo) -> int:
+    """What the phone reported as playing (app, title, artist or channel, time): stored as watched/listened items with the app and
+    the time of day, once per (app, title) within ten minutes. -> how many were new."""
+    from apa import usage
+
+    today = datetime.now(tz).date()
+    existing = [w for w in await watched(sm, 1, today) if w.get("src") == "device"]
+    recent = {(w.get("app"), w.get("t")): w for w in existing}
+    rows = []
+    for it in items[:50]:
+        at = it["at"].astimezone(tz)
+        title, app = " ".join(str(it["title"]).split())[:140], " ".join(str(it["app"]).split())[:60]
+        if len(title) < 2 or not app:
+            continue
+        prev = recent.get((app, title))
+        if prev and prev["date"] == at.date() and prev.get("at") and abs((at - datetime.combine(at.date(), datetime.strptime(prev["at"], "%H:%M").time(), tzinfo=tz)).total_seconds()) < 600:
+            continue
+        kind = "listened" if usage.category(app) == "music" else "watched"
+        body = {"k": kind, "c": " ".join(str(it.get("artist") or "").split())[:60], "t": title, "app": app, "at": f"{at:%H:%M}", "src": "device"}
+        recent[(app, title)] = {"date": at.date(), **body}
+        rows.append(_row(WATCH, json.dumps(body, ensure_ascii=False), day=at.date(), source="device", shared=False))
+    async with sm() as s:
+        s.add_all(rows)
+        await s.execute(delete(MemoryItem).where(MemoryItem.kind == WATCH, MemoryItem.source == "device", MemoryItem.day < today - timedelta(days=90)))
+        await s.commit()
+    return len(rows)
 
 
 async def replace_api_watch(sm: async_sessionmaker, day: date, items: list[dict]) -> int:

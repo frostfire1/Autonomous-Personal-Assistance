@@ -7,6 +7,7 @@ import id.frostfire.apa.health.Metric
 import id.frostfire.apa.health.Sleep
 import id.frostfire.apa.listener.AlarmDismissDetector
 import id.frostfire.apa.listener.IdempotencyKey
+import id.frostfire.apa.listener.MediaCapture
 import id.frostfire.apa.listener.NotificationFilter
 import id.frostfire.apa.listener.Scrubber
 import org.junit.Assert.assertEquals
@@ -310,5 +311,15 @@ class HealthPayloadTest {
     @Test fun payloadsAreCappedToWhatTheServerAccepts() {
         val many = (0 until 700).map { Metric(Instant.ofEpochSecond(it * 60L), steps = 1) }
         assertEquals(500, HealthPayload.build("d", many, emptyList()).getJSONArray("metrics").length())
+    }
+}
+
+class MediaCaptureTest {
+    @Test fun aMediaNotificationYieldsTitleAndArtistAndOthersAreIgnored() {
+        assertEquals("Lagu Santai" to "Tulus", MediaCapture.read("transport", false, " Lagu Santai ", "Tulus"))
+        assertEquals("Video baru" to "Kelas Kode", MediaCapture.read(null, true, "Video baru", "Kelas Kode"))  // a media session without the category
+        assertEquals(null, MediaCapture.read("msg", false, "Budi", "halo"))  // a chat message is not media
+        assertEquals(null, MediaCapture.read("transport", false, "x", "y"))  // a one-letter title is noise
+        assertEquals("Judul" to "", MediaCapture.read("transport", false, "Judul", null))
     }
 }

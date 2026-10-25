@@ -114,3 +114,8 @@ Payments and their confirmation messages, the diary, learned items, notes and th
 - **GIFs** (`GIPHY_API_KEY` or `TENOR_API_KEY`): the assistant can answer with a GIF when it truly fits (a celebration, a joke, a bit of
   comfort), never on money losses, health or security, at most 20 a day. Only links on Giphy's or Tenor's own domains are ever sent, with
   the strictest content rating. Without a key it simply answers in words.
+- **The last app and the last content:** ask "which app did I use last?" or "what did I last watch or listen to?" and the assistant looks it up
+  (the `activity` look-up): the apps in order of when you last used them, on the phone and the PC, and the latest videos and songs. The
+  phone sends when each app was first and last used, and what a media player was playing (title, artist or channel, app, time; read from
+  media notifications, off with the switch in the app's settings). The diary entry of the day uses the same: which app you used until
+  when, and the last thing you watched or listened to. The phone reports about every 30 minutes, so the last minutes may be missing.

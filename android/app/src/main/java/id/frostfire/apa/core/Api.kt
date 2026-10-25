@@ -81,6 +81,9 @@ class Api(private val cfg: Config) {
         return call(builder("/ingest/heartbeat").post(body.toString().toRequestBody(JSON)).build())
     }
 
+    /** What the phone's media notifications said was playing (title, artist or channel, app, time). */
+    suspend fun postMedia(body: JSONObject): Result = call(builder("/ingest/media").post(body.toString().toRequestBody(JSON)).build())
+
     /** One day of app usage from the ActivityWatch app on this phone: app names and seconds only. */
     suspend fun putUsage(body: JSONObject): Result = call(builder("/ingest/usage").post(body.toString().toRequestBody(JSON)).build())
 

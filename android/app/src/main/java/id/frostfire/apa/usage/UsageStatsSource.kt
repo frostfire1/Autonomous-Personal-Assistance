@@ -32,6 +32,8 @@ object UsageStatsSource {
         val totals = HashMap<String, Long>()
         var first: Pair<String, Instant>? = null
         var last: Pair<String, Instant>? = null
+        val firsts = HashMap<String, Instant>()
+        val lasts = HashMap<String, Instant>()
         fun close(pkg: String, at: Long) {
             val from = open.remove(pkg) ?: return
             val secs = (at - from) / 1000
@@ -41,6 +43,8 @@ object UsageStatsSource {
             val s = Instant.ofEpochMilli(from)
             val e = Instant.ofEpochMilli(at)
             if (first == null || s.isBefore(first!!.second)) first = name to s
+            if (firsts[name]?.isAfter(s) != false) firsts[name] = s
+            if (lasts[name]?.isBefore(e) != false) lasts[name] = e
             if (last == null || e.isAfter(last!!.second)) last = name to e
         }
         val e = UsageEvents.Event()
@@ -54,6 +58,6 @@ object UsageStatsSource {
             }
         }
         open.keys.toList().forEach { close(it, end.toEpochMilli()) }  // still in use right now
-        return UsagePush.Day(totals, first, last)
+        return UsagePush.Day(totals, first, last, firsts, lasts)
     }
 }

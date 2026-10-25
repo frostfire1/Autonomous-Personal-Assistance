@@ -120,6 +120,34 @@ async def ingest_usage(body: UsageIn) -> dict[str, object]:
     return {"ok": True, "apps": kept}
 
 
+class MediaItem(BaseModel):
+    app: str = Field(min_length=1, max_length=60)
+    title: str = Field(min_length=2, max_length=200)
+    artist: str | None = Field(default=None, max_length=120)
+    at: datetime
+
+
+class MediaIn(BaseModel):
+    device: str = Field(min_length=1, max_length=40)
+    items: list[MediaItem] = Field(max_length=50)
+
+
+@router.post("/media", dependencies=[Depends(require_ingest_key)])
+async def ingest_media(body: MediaIn) -> dict[str, object]:
+    """What the phone's media notifications said was playing (YouTube, Spotify...): title, artist or channel, app and time. Stored
+    encrypted as watched or listened items; the assistant uses it for "what did I last watch or listen to"."""
+    from zoneinfo import ZoneInfo
+
+    from apa import assistant_memory
+    from apa.core.db import SessionLocal
+
+    try:
+        stored = await assistant_memory.add_playing(SessionLocal, [i.model_dump() for i in body.items], ZoneInfo(get_settings().timezone))
+    except assistant_memory.SecretsUnavailable:
+        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, "SECRETS_KEY is not set") from None
+    return {"ok": True, "stored": stored}
+
+
 @router.post(
     "/notification", status_code=status.HTTP_202_ACCEPTED, dependencies=[Depends(require_ingest_key)]
 )

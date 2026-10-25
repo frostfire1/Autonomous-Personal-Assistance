@@ -85,6 +85,11 @@ class Config(context: Context) {
         get() = p.getLong("usage_sent_at", 0L)
         set(v) = p.edit().putLong("usage_sent_at", v).apply()
 
+    /** Remember what is playing (from media notifications) so the assistant knows the last video or song. On by default. */
+    var mediaCapture: Boolean
+        get() = p.getBoolean("media_capture", true)
+        set(v) = p.edit().putBoolean("media_capture", v).apply()
+
     val deviceId: String
         get() = p.getString("device_id", null) ?: UUID.randomUUID().toString().also {
             p.edit().putString("device_id", it).apply()

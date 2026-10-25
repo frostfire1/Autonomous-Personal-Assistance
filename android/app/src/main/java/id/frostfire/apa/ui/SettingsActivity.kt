@@ -113,6 +113,7 @@ class SettingsActivity : ComponentActivity() {
         val hmac = field("", if (cfg.hmacSecret.isBlank()) "empty = not signed" else "saved (encrypted); fill in to replace")
         label(if (id.frostfire.apa.usage.UsageStatsSource.granted(this)) "App usage: allowed (sent with each sync, app names and minutes only)"
               else "App usage: not allowed yet. Tap the button, find APA in the list and allow it.")
+        val media = box("Remember what I watch and listen to (titles from media notifications, sent to your own server)", cfg.mediaCapture)
         button("Allow app usage access") { startActivity(android.content.Intent(android.provider.Settings.ACTION_USAGE_ACCESS_SETTINGS)) }
         label("ActivityWatch API key (optional: from the ActivityWatch app on this phone, to send your app usage)")
         val aw = field("", if (cfg.awKey.isBlank()) "empty = no app usage sent" else "saved (encrypted); fill in to replace")
@@ -140,6 +141,7 @@ class SettingsActivity : ComponentActivity() {
                 cfg.wakeHour = it.groupValues[1].toInt(); cfg.wakeMinute = it.groupValues[2].toInt()
             }
             cfg.autoAfterAlarm = alarm.isChecked; cfg.scheduledFallback = sched.isChecked; cfg.onBluetooth = bt.isChecked
+            cfg.mediaCapture = media.isChecked
             key.text.clear()
             BriefingScheduler.schedule(this)
             SyncWorker.schedulePeriodic(this)

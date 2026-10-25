@@ -46,15 +46,18 @@ def day_usage(aw, window, afk, day_start, day_end):
     lines, period = query(aw, window, afk, day_start, day_end)
     merged = call(f"{aw}/api/0/query/", method="POST", body={"timeperiods": [period], "query": lines + ["RETURN = merge_events_by_keys(events, [\"app\"]);"]})[0]
     totals = {e["data"].get("app", "").strip(): e["duration"] for e in merged if e["data"].get("app")}
-    first = call(f"{aw}/api/0/query/", method="POST", body={"timeperiods": [period], "query": lines + ["RETURN = limit_events(sort_by_timestamp(events), 1);"]})[0]
-    last = call(f"{aw}/api/0/query/", method="POST", body={"timeperiods": [period], "query": lines + ["RETURN = limit_events(sort_by_timestamp(events), 100000);"]})[0]
+    events = call(f"{aw}/api/0/query/", method="POST", body={"timeperiods": [period], "query": lines + ["RETURN = limit_events(sort_by_timestamp(events), 100000);"]})[0]
     apps = {a: {"app": a, "seconds": int(s)} for a, s in totals.items() if s >= 1}
-    if first and first[0]["data"].get("app") in apps:
-        apps[first[0]["data"]["app"]]["first_at"] = first[0]["timestamp"]
-    if last and last[-1]["data"].get("app") in apps:
-        e = last[-1]
-        end_at = datetime.fromisoformat(e["timestamp"].replace("Z", "+00:00")) + timedelta(seconds=e["duration"])
-        apps[e["data"]["app"]]["last_at"] = end_at.isoformat()
+    for e in events:  # when each app was first and last in use (for "what was I using last")
+        name = e["data"].get("app", "").strip()
+        if name not in apps:
+            continue
+        start = datetime.fromisoformat(e["timestamp"].replace("Z", "+00:00"))
+        end_at = start + timedelta(seconds=e["duration"])
+        if "first_at" not in apps[name] or start < datetime.fromisoformat(apps[name]["first_at"]):
+            apps[name]["first_at"] = start.isoformat()
+        if "last_at" not in apps[name] or end_at > datetime.fromisoformat(apps[name]["last_at"]):
+            apps[name]["last_at"] = end_at.isoformat()
     return list(apps.values())
 
 
