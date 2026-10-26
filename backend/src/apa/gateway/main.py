@@ -7,7 +7,19 @@ from apa import currency, mcp_server
 from apa.core.db import SessionLocal
 from apa.core.logging import configure_logging
 from apa.core.redis import arq_redis_settings
-from apa.gateway.routers import briefing, dashboard, health, ingest, inspect, llm, news, prefs, prices, setup, update
+from apa.gateway.routers import (
+    briefing,
+    dashboard,
+    health,
+    ingest,
+    inspect,
+    llm,
+    news,
+    prefs,
+    prices,
+    setup,
+    update,
+)
 from apa.integrations.llm import LLMClient
 
 
