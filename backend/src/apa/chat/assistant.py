@@ -15,7 +15,7 @@ from zoneinfo import ZoneInfo
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
-from apa import assistant_memory
+from apa import assistant_memory, llm_config
 from apa.agents.personas import ROUTINE
 from apa.chat import actions
 from apa.chat.snapshot import finance_snapshot
@@ -28,6 +28,7 @@ log = get_logger(__name__)
 MAX_STEPS = 4  # look-ups per message: enough to chain two or three, bounded so a confused model cannot loop
 MAX_REPLY = 1800
 CONTEXT_CHARS = 2600
+ASSISTANT_AGENT = "A-00"  # the id this conversation runs under, so its dashboard preset applies here too
 
 MEMORY_TOOL_DOC = """Memory tools (they take effect at once; then answer):
 - remember {"fact": string}  a short note about the owner, in their words
@@ -137,8 +138,10 @@ async def _context(sm, tz: ZoneInfo, now: datetime, history_block: str, reply_to
     notes = await assistant_memory.load(sm)
     remembered = ("WHAT YOU REMEMBER about the owner (their own notes):\n" + "\n".join(f"{i}. {n}" for i, n in enumerate(notes, 1)) + "\n") if notes else ""
     style_block = "HOW TO WRITE TO THE OWNER:\n" + await profile.style_guide(sm) + "\n"
+    _, _, chars_mult = (await llm_config.current()).budget(ROUTINE, ASSISTANT_AGENT)
+    data_chars = max(400, round(CONTEXT_CHARS * chars_mult))  # the preset trims or widens the facts block
     return (
-        f"Now: {now:%A %d/%m/%Y %H:%M} ({tz})\n{style_block}{profile_block}{remembered}{learned_block}{shared_block}{diary_block}{skills + chr(10) if skills else ""}{replied}Recent chat:\n{history_block}\n\n<DATA>\n{facts[:CONTEXT_CHARS]}\n</DATA>"
+        f"Now: {now:%A %d/%m/%Y %H:%M} ({tz})\n{style_block}{profile_block}{remembered}{learned_block}{shared_block}{diary_block}{skills + chr(10) if skills else ""}{replied}Recent chat:\n{history_block}\n\n<DATA>\n{facts[:data_chars]}\n</DATA>"
     )
 
 
@@ -168,7 +171,7 @@ async def converse(
         final = step == MAX_STEPS  # out of look-ups: the next answer must be words
         res = await llm.complete(
             ROUTINE, system, "\n\n".join(transcript) + ("\n\n(No more look-ups: answer now with {\"say\": ...}.)" if final else ""),
-            json_mode=True, max_tokens=600, temperature=0.3, agent="A-00",
+            json_mode=True, max_tokens=600, temperature=0.3, agent=ASSISTANT_AGENT,
         )
         tokens += (res.prompt_tokens or 0) + (res.completion_tokens or 0)
         kind, value = parse_step(res.content)

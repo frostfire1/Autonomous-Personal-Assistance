@@ -126,6 +126,9 @@ class LLMClient:
     ) -> LLMResult:
         """`images` is (bytes, mime) pairs for vision routes, sent as base64 data URLs. `timeout` (seconds)
         overrides the client default for this one call; vision passes VISION_TIMEOUT_S."""
+        cfg = await self.config()
+        tokens_mult, _, _ = cfg.budget(route, agent)
+        effective_max_tokens = llm_config.scale_tokens(max_tokens, tokens_mult)
         content: Any = user
         if images:
             content = [{"type": "text", "text": user}] + [
@@ -139,7 +142,7 @@ class LLMClient:
                 {"role": "system", "content": system},
                 {"role": "user", "content": content},
             ],
-            "max_tokens": max_tokens,
+            "max_tokens": effective_max_tokens,
             "temperature": temperature,
         }
         if json_mode:

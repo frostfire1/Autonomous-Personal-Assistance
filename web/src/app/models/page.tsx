@@ -3,19 +3,22 @@
 import { useEffect, useState } from "react";
 import { api, post, put, useApi } from "@/lib/api";
 
-type Slot = { enabled: boolean; provider: string; model: string };
+type Preset = "thrifty" | "normal" | "generous";
+type Slot = { enabled: boolean; provider: string; model: string; preset: Preset };
+type PresetInfo = { key: Preset; label: string; tokens_pct: number; turns: number; context_pct: number };
 type Provider = { base_url: string; api_key_hint?: string };
 type Voice = { engine: string; gemini_model: string; custom_provider: string; custom_model: string; custom_voices: string[] };
-type Custom = { name: string; persona: string; hint: string; data: string[]; enabled: boolean; provider: string; model: string };
+type Custom = { name: string; persona: string; hint: string; data: string[]; enabled: boolean; provider: string; model: string; preset: Preset };
 type Config = { providers: Record<string, Provider>; routes: Record<string, Slot>; agents: Record<string, Slot>; voice: Voice; custom: Record<string, Custom> };
 type View = {
   config: Config;
   routes: { key: string; label: string }[];
   agents: { id: string; name: string; route: string; debater: boolean; protected: boolean; uses_ai: boolean }[];
   gemini_key_set: boolean;
+  presets: PresetInfo[];
 };
 
-const OFF: Slot = { enabled: true, provider: "", model: "" };
+const OFF: Slot = { enabled: true, provider: "", model: "", preset: "normal" };
 
 export default function ModelsPage() {
   const { data: view, reload } = useApi<View>("/llm");
@@ -89,7 +92,7 @@ export default function ModelsPage() {
   function addAgent() {
     let i = Object.keys(cfg!.custom).length + 1;
     while (`C-agen${i}` in cfg!.custom) i++;
-    setCfg({ ...cfg!, custom: { ...cfg!.custom, [`C-agen${i}`]: { name: `Agent ${i}`, persona: "", hint: "", data: ["finance"], enabled: true, provider: "", model: "" } } });
+    setCfg({ ...cfg!, custom: { ...cfg!.custom, [`C-agen${i}`]: { name: `Agent ${i}`, persona: "", hint: "", data: ["finance"], enabled: true, provider: "", model: "", preset: "normal" } } });
   }
   function setAgent(id: string, c: Partial<Custom>) {
     setCfg({ ...cfg!, custom: { ...cfg!.custom, [id]: { ...cfg!.custom[id], ...c } } });
@@ -102,7 +105,8 @@ export default function ModelsPage() {
 
   async function save() {
     setMsg("Saving...");
-    const keep = (m: Record<string, Slot>) => Object.fromEntries(Object.entries(m).filter(([, s]) => !s.enabled || s.provider));
+    // a slot is worth saving if it is switched off, has its own provider, or has a size other than the default
+    const keep = (m: Record<string, Slot>) => Object.fromEntries(Object.entries(m).filter(([, s]) => !s.enabled || s.provider || (s.preset && s.preset !== "normal")));
     const providers = Object.fromEntries(Object.entries(cfg!.providers).map(([n, p]) => [n, { base_url: p.base_url, api_key: keys[n] }]));
     try {
       await put("/llm", { providers, routes: keep(cfg!.routes), agents: keep(cfg!.agents), custom: cfg!.custom, voice: { ...cfg!.voice, custom_voices: voices.split(",").map((v) => v.trim()).filter(Boolean) } });
@@ -114,6 +118,22 @@ export default function ModelsPage() {
     }
   }
 
+  // How much output and context this role or agent is given. The numbers come from the server so there is one
+  // definition of each size; "normal" is what the code asked for before this setting existed.
+  const presetSelect = (value: Preset | undefined, onPick: (p: Preset) => void) => {
+    const current = value ?? "normal";
+    const info = view!.presets.find((p) => p.key === current);
+    return (
+      <select
+        value={current}
+        title={info ? `answers ${info.tokens_pct}% as long, ${info.turns} chat turns remembered, ${info.context_pct}% of the data block` : undefined}
+        onChange={(e) => onPick(e.target.value as Preset)}
+      >
+        {view!.presets.map((p) => <option key={p.key} value={p.key}>{p.label}</option>)}
+      </select>
+    );
+  };
+
   const row = (kind: "routes" | "agents", id: string, title: string, hint: string, core = false, ai = true) => {
     const s = slot(kind, id);
     const list = models[s.provider] ?? [];
@@ -121,13 +141,14 @@ export default function ModelsPage() {
       <tr key={`${kind}${id}`}>
         <td><b>{title}</b><div className="muted">{hint}</div></td>
         <td>{core ? <span title="System core: cannot be disabled or removed">🔒 core</span> : <input type="checkbox" checked={s.enabled} onChange={(e) => setSlot(kind, id, { enabled: e.target.checked })} />}</td>
-        {!ai ? <td colSpan={3} className="muted">run by code, no AI</td> : <>
+        {!ai ? <td colSpan={4} className="muted">run by code, no AI</td> : <>
         <td>
           <select value={s.provider} onChange={(e) => setSlot(kind, id, { provider: e.target.value, model: e.target.value ? s.model : "" })}>
             <option value="">Default (LiteLLM)</option>
             {names.map((n) => <option key={n} value={n}>{n}</option>)}
           </select>
         </td>
+        <td>{presetSelect(s.preset, (p) => setSlot(kind, id, { preset: p }))}</td>
         <td>
           <input list={`m-${kind}-${id}`} value={s.model} disabled={!s.provider} placeholder={s.provider ? "choose or type a model" : "-"} onChange={(e) => setSlot(kind, id, { model: e.target.value })} />
           <datalist id={`m-${kind}-${id}`}>{list.map((m) => <option key={m} value={m} />)}</datalist>
@@ -146,6 +167,10 @@ export default function ModelsPage() {
       <p className="muted">
         Add as many AI providers as you like (an OpenAI-compatible URL plus an API key), fetch their model lists, then choose a model for
         each role and each agent, or disable agents. Anything left on &quot;Default&quot; still goes through LiteLLM as before. Keys are stored on the server and never sent back to this page.
+      </p>
+      <p className="muted">
+        <b>Size</b> controls how much output each role or agent gets and how much recent chat it remembers.
+        <i> Hemat</i> trims answers and context (cheaper, shorter), <i>Normal</i> is what the code was designed for, <i>Boros</i> gives longer answers and keeps more history. Hover a size to see the numbers.
       </p>
 
       <h2>AI providers</h2>
@@ -166,7 +191,7 @@ export default function ModelsPage() {
       <h2>AI roles</h2>
       <div className="tablewrap">
         <table>
-          <thead><tr><th>Role</th><th>Enabled</th><th>Provider</th><th>Model</th><th /></tr></thead>
+          <thead><tr><th>Role</th><th>Enabled</th><th>Provider</th><th>Size</th><th>Model</th><th /></tr></thead>
           <tbody>{view.routes.map((r) => row("routes", r.key, r.key.replace("router-", ""), r.label))}</tbody>
         </table>
       </div>
@@ -175,7 +200,7 @@ export default function ModelsPage() {
       <p className="muted">Debater agents vote on transaction decisions; disabled ones do not take part (the quorum adjusts). An agent's model choice overrides the role's choice.</p>
       <div className="tablewrap">
         <table>
-          <thead><tr><th>Agent</th><th>Enabled</th><th>Provider</th><th>Model</th><th /></tr></thead>
+          <thead><tr><th>Agent</th><th>Enabled</th><th>Provider</th><th>Size</th><th>Model</th><th /></tr></thead>
           <tbody>{view.agents.map((a) => row("agents", a.id, `${a.id} ${a.name}`, a.protected ? "system core" : a.debater ? "takes part in debates" : "answers in chat", a.protected, a.uses_ai))}</tbody>
         </table>
       </div>
@@ -206,6 +231,7 @@ export default function ModelsPage() {
             </select>
             <input list={`m-c-${id}`} value={c.model} disabled={!c.provider} placeholder={c.provider ? "model" : "-"} onChange={(e) => setAgent(id, { model: e.target.value })} />
             <datalist id={`m-c-${id}`}>{(models[c.provider] ?? []).map((m) => <option key={m} value={m} />)}</datalist>
+            {presetSelect(c.preset, (p) => setAgent(id, { preset: p }))}
           </div>
         </div>
       ))}

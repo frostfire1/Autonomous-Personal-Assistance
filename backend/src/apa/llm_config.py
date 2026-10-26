@@ -35,6 +35,23 @@ ROUTES: dict[str, str] = {
 }
 _NAME = re.compile(r"^[a-z0-9][a-z0-9_-]{0,29}$")
 
+# How much room a role or agent gets, as the owner sees it in the dashboard. "normal" is exactly what the code
+# asked for before this setting existed, so a fresh install and every saved configuration behave as they always did.
+# The numbers multiply the `max_tokens` of a call and the size of the chat context (recent turns and the data block);
+# they do not change what the provider's model can do, only what we choose to spend on it.
+Preset = Literal["thrifty", "normal", "generous"]
+PRESETS: dict[str, tuple[float, int, float]] = {  # preset -> (max_tokens x, chat turns kept, context chars x)
+    "thrifty": (0.5, 6, 0.5),
+    "normal": (1.0, 16, 1.0),
+    "generous": (2.0, 32, 1.5),
+}
+PRESET_LABELS: dict[str, str] = {  # shown in the dashboard
+    "thrifty": "Hemat (shorter answers, less history)",
+    "normal": "Normal (as designed)",
+    "generous": "Boros (longer answers, more history)",
+}
+TOKEN_FLOOR, TOKEN_CEILING = 16, 8000  # a multiplied max_tokens never leaves this range
+
 
 class Provider(BaseModel):
     base_url: str
@@ -53,6 +70,7 @@ class Slot(BaseModel):
     enabled: bool = True
     provider: str = ""
     model: str = Field(default="", max_length=120)
+    preset: Preset = "normal"  # how much output and context this role or agent is given
 
     @field_validator("model")
     @classmethod
@@ -71,6 +89,7 @@ class CustomAgent(BaseModel):
     enabled: bool = True
     provider: str = ""
     model: str = Field(default="", max_length=120)
+    preset: Preset = "normal"
 
     @field_validator("name", "persona", "hint")
     @classmethod
@@ -138,10 +157,21 @@ class LLMConfig(BaseModel):
         """The setting that applies to a call: the agent's own, else its role's, else None (the original behaviour)."""
         if agent and agent in self.custom:
             c = self.custom[agent]
-            return Slot(enabled=c.enabled, provider=c.provider, model=c.model)
+            return Slot(enabled=c.enabled, provider=c.provider, model=c.model, preset=c.preset)
         if agent and agent in self.agents:
             return self.agents[agent]
         return self.routes.get(route)
+
+    def preset_for(self, route: str, agent: str | None = None) -> str:
+        """The preset that applies to a call. A slot that only sets a preset (no provider, still on the proxy)
+        counts too, so the choice works whether or not the owner picked their own provider."""
+        slot = self.slot_for(route, agent)
+        name = slot.preset if slot is not None else "normal"
+        return name if name in PRESETS else "normal"
+
+    def budget(self, route: str, agent: str | None = None) -> tuple[float, int, float]:
+        """(max_tokens multiplier, chat turns to keep, context characters multiplier) for a call."""
+        return PRESETS[self.preset_for(route, agent)]
 
     def agent_enabled(self, agent_id: str) -> bool:
         if agent_id in PROTECTED:
@@ -153,6 +183,14 @@ class LLMConfig(BaseModel):
 
     def active_custom(self) -> dict[str, CustomAgent]:
         return {k: v for k, v in self.custom.items() if v.enabled}
+
+
+def scale_tokens(max_tokens: int | None, mult: float) -> int | None:
+    """`max_tokens` after the preset, kept sane: never below a usable answer, never above the ceiling.
+    None (the caller let the model decide) stays None."""
+    if max_tokens is None or mult == 1.0:
+        return max_tokens
+    return max(TOKEN_FLOOR, min(TOKEN_CEILING, round(max_tokens * mult)))
 
 
 def masked(key: str) -> str:

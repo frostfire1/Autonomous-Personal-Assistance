@@ -363,3 +363,102 @@ def test_the_default_litellm_example_file_is_valid_and_has_every_role():
     cfg = _yaml.safe_load((Path(__file__).resolve().parents[2] / "infra" / "litellm" / "config.example.yaml").read_text(encoding="utf-8"))
     assert {m["model_name"] for m in cfg["model_list"]} >= set(ROUTES)  # every AI role has a route
     assert cfg["litellm_settings"]["turn_off_message_logging"] is True  # /private stays unlogged
+
+
+# ---- preset: how much output and context each role or agent gets -------------------------------------------------------------
+
+
+def test_normal_preset_is_a_no_op_so_a_fresh_install_calls_the_model_exactly_as_before():
+    """The default preset must leave every historical call unchanged: same max_tokens, same history length,
+    same data block. If this ever drifts, old users will see different answers after an upgrade."""
+    from apa.llm_config import PRESETS, LLMConfig, scale_tokens
+
+    assert PRESETS["normal"] == (1.0, 16, 1.0)  # the numbers the code was designed for
+    assert scale_tokens(600, 1.0) == 600 and scale_tokens(60, 1.0) == 60 and scale_tokens(6000, 1.0) == 6000
+    assert scale_tokens(None, 1.0) is None  # None (let the model decide) is never turned into a number
+    cfg = LLMConfig()
+    assert cfg.preset_for("router-routine-classifier") == "normal"
+    assert cfg.budget("router-routine-classifier", "A-02") == (1.0, 16, 1.0)
+
+
+def test_the_preset_applies_to_the_role_and_the_agent_wins_when_both_are_set():
+    """An owner who picks 'generous' for a role gets it everywhere in that role, except where they picked a
+    different preset for one agent. The custom agent's own preset is used for calls under its id."""
+    from apa.llm_config import LLMConfig
+
+    cfg = LLMConfig(
+        routes={"router-routine-classifier": {"preset": "generous"}},  # no provider: still through LiteLLM, bigger budget
+        agents={"A-02": {"preset": "thrifty"}},  # the finance agent trims its own answers
+        custom={"C-gym": {"name": "Coach", "preset": "generous"}},
+    )
+    assert cfg.budget("router-routine-classifier")[1] == 32  # the role on its own: generous history
+    assert cfg.budget("router-routine-classifier", "A-02") == (0.5, 6, 0.5)  # the agent wins
+    assert cfg.budget("router-routine-classifier", "A-05") == (2.0, 32, 1.5)  # no agent setting: the role's
+    assert cfg.budget("router-routine-classifier", "C-gym")[0] == 2.0  # a custom agent uses its own preset
+
+
+def test_scale_tokens_clamps_to_keep_answers_usable_and_bounded():
+    """A multiplied budget can never fall below a usable answer (16 tokens is a sentence) and never exceed
+    the ceiling that keeps a slow provider from running away with cost."""
+    from apa.llm_config import TOKEN_CEILING, TOKEN_FLOOR, scale_tokens
+
+    assert scale_tokens(60, 0.5) == 30 and scale_tokens(600, 2.0) == 1200  # ordinary scaling
+    assert scale_tokens(16, 0.5) == TOKEN_FLOOR  # a tiny classifier answer stays a sentence long
+    assert scale_tokens(6000, 2.0) == TOKEN_CEILING  # a huge receipt call cannot double past the cap
+
+
+def test_the_preset_rescales_max_tokens_at_the_wire_so_every_call_site_benefits_without_edits():
+    """The owner's preset must apply to every existing call (debate, chat, vision, routines, ...). Instead
+    of editing dozens of sites, scale_tokens is applied inside LLMClient. One test on the hot path proves
+    the wiring; the others keep passing because the default is 'normal' = x1."""
+    import asyncio
+
+    import httpx
+
+    from apa import llm_config
+    from apa.integrations.llm import LLMClient
+
+    seen = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        import json as _json
+        seen.append(_json.loads(request.read())["max_tokens"])
+        return httpx.Response(200, json={"model": "m", "choices": [{"message": {"content": "ok"}}]})
+
+    async def run():
+        cfg = llm_config.LLMConfig(agents={"A-02": {"preset": "thrifty"}, "A-04": {"preset": "generous"}})
+        llm = LLMClient(httpx.AsyncClient(base_url="http://litellm/v1", transport=httpx.MockTransport(handler)))
+
+        async def fixed():
+            return cfg
+
+        llm.config = fixed
+        await llm.complete("router-routine-classifier", "s", "u", max_tokens=400, agent="A-02")  # thrifty: half
+        await llm.complete("router-routine-classifier", "s", "u", max_tokens=400, agent="A-04")  # generous: double
+        await llm.complete("router-routine-classifier", "s", "u", max_tokens=400, agent="A-05")  # unset: unchanged
+
+    asyncio.run(run())
+    assert seen == [200, 800, 400]
+
+
+def test_the_preset_survives_a_save_and_a_switched_off_slot_can_still_carry_its_size():
+    """A slot that only sets a preset (no provider, no model) must be kept and reloaded, otherwise the
+    owner's choice is lost on save. The 'normal' default is dropped by the dashboard before saving."""
+    from apa.llm_config import LLMConfig
+
+    cfg = LLMConfig(agents={"A-02": {"preset": "thrifty"}})  # no provider, not switched off: still valid
+    round_trip = LLMConfig(**cfg.model_dump())
+    assert round_trip.agents["A-02"].preset == "thrifty"
+    assert round_trip.budget("router-routine-classifier", "A-02")[0] == 0.5
+
+
+def test_the_dashboard_sees_the_preset_choices_so_the_page_has_no_private_copy_of_the_numbers():
+    """GET /llm returns the list of presets with their effects, so the UI shows one definition only."""
+    from apa.gateway.routers.llm import _view
+    from apa.llm_config import LLMConfig
+
+    view = _view(LLMConfig())
+    keys = {p["key"] for p in view["presets"]}
+    assert keys == {"thrifty", "normal", "generous"}
+    normal = next(p for p in view["presets"] if p["key"] == "normal")
+    assert normal["tokens_pct"] == 100 and normal["turns"] == 16 and normal["context_pct"] == 100

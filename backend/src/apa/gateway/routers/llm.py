@@ -30,6 +30,12 @@ def _view(cfg: C.LLMConfig) -> dict:
             for a in AGENTS.values() if a.kind != "engine" or a.protected
         ],
         "gemini_key_set": bool(get_settings().gemini_api_key),
+        # the size choices the dashboard offers, with what each one does, so the page needs no copy of the numbers
+        "presets": [
+            {"key": k, "label": C.PRESET_LABELS[k], "tokens_pct": round(PRESET[0] * 100), "turns": PRESET[1],
+             "context_pct": round(PRESET[2] * 100)}
+            for k, PRESET in C.PRESETS.items()
+        ],
     }
 
 

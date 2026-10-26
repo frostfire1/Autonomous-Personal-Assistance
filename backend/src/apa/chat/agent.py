@@ -14,6 +14,7 @@ from zoneinfo import ZoneInfo
 
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
+from apa import llm_config
 from apa.agents.personas import AGENTS, ROUTINE
 from apa.chat.actions import TOOL_SPEC, propose
 from apa.chat.snapshot import finance_snapshot, health_snapshot
@@ -24,7 +25,9 @@ log = get_logger(__name__)
 
 MAX_REPLY = 1200
 HISTORY_KEY = "apa:chat:history"  # the owner's ordinary chat only; /private never touches Redis
-HISTORY_TURNS = 16  # the assistant remembers the recent conversation, so short references make sense
+# What the dashboard preset can show at most. Redis always keeps enough turns for the biggest preset ("generous" = 32),
+# so switching to a bigger preset later immediately gives the assistant more memory instead of waiting for new turns.
+HISTORY_TURNS = max(turns for _, turns, _ in llm_config.PRESETS.values())
 HISTORY_TTL_S = 6 * 3600
 
 # Roles that can answer from real data today. Value = the facts function.
@@ -113,8 +116,11 @@ async def remember_assistant(redis: Any | None, reply: str) -> None:
         log.warning("chat_history_unavailable", error=str(e))
 
 
-def _history_block(history: list[dict]) -> str:
-    return "\n".join(f"{h['r']}: {h['t']}" for h in history[-HISTORY_TURNS:]) or "(none)"
+def _history_block(history: list[dict], route: str = ROUTINE, agent: str | None = "A-00") -> str:
+    """The recent conversation as the model sees it. How many turns is the owner's preset for this role or
+    agent (dashboard, AI models); `last()` is used because callers are not all async and the preset is cached."""
+    _, turns, _ = llm_config.last().budget(route, agent)
+    return "\n".join(f"{h['r']}: {h['t']}" for h in history[-turns:]) or "(none)"
 
 
 ACTION_SYSTEM = (
@@ -166,7 +172,7 @@ async def ask_agent(llm: LLMClient, role: str, text: str, facts: str, history: l
         agent = AGENTS[role]
         name, persona = agent.name, agent.persona or PERSONA_EXTRA.get(role, "")
     system = f"You are {name} (agent {role}) of the owner's personal assistant. {persona} {ANSWER_RULES}"
-    user = f"Recent chat:\n{_history_block(history)}\n\n<DATA>\n{facts}\n</DATA>\n\nUSER: {text}"
+    user = f"Recent chat:\n{_history_block(history, agent=role)}\n\n<DATA>\n{facts}\n</DATA>\n\nUSER: {text}"
     try:
         res = await llm.complete(ROUTINE, system, user, max_tokens=350, temperature=0.3, agent=role)
     except LLMDisabled:
