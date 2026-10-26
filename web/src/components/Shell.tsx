@@ -22,6 +22,7 @@ const PANELS = [
   ["/news", "News and CVEs"],
   ["/storage", "Storage"],
   ["/settings", "Settings"],
+  ["/update", "Updates"],
 ] as const;
 
 /** The login screen until a key is accepted, then the navigation and the page. */
