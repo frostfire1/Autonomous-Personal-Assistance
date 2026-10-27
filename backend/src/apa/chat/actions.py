@@ -155,11 +155,43 @@ async def _allowed_categories(sm: async_sessionmaker) -> list[str]:
 
 def parse_call(raw: str) -> tuple[str, dict] | str:
     """Model output -> (tool, args), or a reply string when it asked a question or produced garbage."""
-    try:
-        d = json.loads(raw.strip().removeprefix("```json").removeprefix("```").removesuffix("```").strip())
-        tool, args = d.get("tool"), d.get("args") or {}
-    except (ValueError, AttributeError):
+    if not raw:
         return "Maaf, saya belum paham perintahnya. Coba jelaskan lagi dengan lebih singkat."
+
+    text = re.sub(r"<think>.*?</think>", "", raw, flags=re.DOTALL | re.IGNORECASE).strip()
+
+    # Check for DSML or XML tool call
+    from apa.chat.assistant import parse_dsml_or_xml_tool
+
+    dsml_tool = parse_dsml_or_xml_tool(text)
+    if dsml_tool is not None:
+        tool, args = dsml_tool
+        if tool in TOOLS and isinstance(args, dict):
+            return tool, args
+        if tool == "none":
+            return "Bisa dijelaskan lebih lanjut?"
+
+    clean_json = text.strip()
+    if clean_json.startswith("```"):
+        clean_json = re.sub(r"^```[a-zA-Z]*\n?", "", clean_json)
+        clean_json = re.sub(r"\n?```$", "", clean_json).strip()
+
+    d = None
+    try:
+        d = json.loads(clean_json)
+    except (ValueError, AttributeError):
+        start = clean_json.find("{")
+        end = clean_json.rfind("}")
+        if start != -1 and end > start:
+            try:
+                d = json.loads(clean_json[start : end + 1])
+            except Exception:
+                pass
+
+    if not isinstance(d, dict):
+        return "Maaf, saya belum paham perintahnya. Coba jelaskan lagi dengan lebih singkat."
+
+    tool, args = d.get("tool"), d.get("args") or {}
     if tool == "none":
         return str(d.get("say") or "Bisa dijelaskan lebih lanjut?")[:300]
     if tool not in TOOLS or not isinstance(args, dict):

@@ -18,8 +18,18 @@ router = APIRouter(prefix="/update", tags=["update"], dependencies=[Depends(requ
 
 
 def _root() -> Path:
-    """Project root: four levels up from this file (src/apa/gateway/routers/update.py)."""
-    return Path(__file__).resolve().parents[4]
+    """Project root: dynamically resolved by searching upwards for .git or deploy/deploy.sh."""
+    for env_var in ("PROJECT_ROOT", "APA_ROOT", "APP_ROOT"):
+        val = os.environ.get(env_var)
+        if val and Path(val).exists():
+            return Path(val).resolve()
+    p = Path(__file__).resolve()
+    for parent in p.parents:
+        if (parent / ".git").exists() or (parent / "deploy" / "deploy.sh").exists():
+            return parent
+    if len(p.parents) > 5 and (p.parents[5] / ".git").exists():
+        return p.parents[5]
+    return p.parents[4] if len(p.parents) > 4 else p.parent
 
 
 def _git(*args: str, cwd: Path) -> subprocess.CompletedProcess[str]:

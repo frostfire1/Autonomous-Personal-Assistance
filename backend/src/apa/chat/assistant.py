@@ -8,6 +8,7 @@ comes from a look-up tool or the DATA block, never from the model. DATA, tool re
 content, not instructions."""
 
 import json
+import re
 from datetime import datetime
 from typing import Any
 from zoneinfo import ZoneInfo
@@ -26,7 +27,7 @@ from apa.db.models.ops import TelegramMessage
 log = get_logger(__name__)
 
 MAX_STEPS = 6  # look-ups per message: enough to chain several, bounded so a confused model cannot loop
-MAX_REPLY = 3200
+MAX_REPLY = 15000
 CONTEXT_CHARS = 3800
 ASSISTANT_AGENT = "A-00"  # the id this conversation runs under, so its dashboard preset applies here too
 
@@ -57,7 +58,13 @@ SYSTEM = (
     "Reply as long as the topic deserves: be thorough for research, route questions, or detailed explanations; be concise "
     "for quick confirmations and small talk. Never pad a short answer and never cut a complete one short.\n"
     "You can talk about anything, including things outside personal finance; say so plainly when you are unsure or do not know.\n"
-    "For what the owner used, watched or listened to lately (the last app, the last video or song), call the activity look-up.\n"
+    "Real-time ActivityWatch & Live Presence Awareness: You have real-time ActivityWatch (AW) tracking on the owner's laptop! "
+    "When the owner asks what they are doing right now ('di jam sekarang', 'aku lagi apa', 'lagi buka apa sekarang', 'sekarang aku di mana/lagi ngapain'), "
+    "what they are watching or listening to ('bisa liat aku terakhir liat youtube apa', 'kalo sekarang aku liat youtube apa', 'aku liat apa?'), "
+    "or whether they are still awake ('apakah aku masih bangun/melek?', 'aku masih bangun?'), ALWAYS call the 'activity' tool! "
+    "The tool provides the exact real-time active window, foreground application, active YouTube video with playback status, "
+    "and AFK/awake status ('AKTIF & MELEK' vs AFK). "
+    "Cite the specific real-time window, tab, or video title from the tool result warmly so the owner knows you see what they are engaged with right now.\n"
     "Facts: any figure about money, sleep, vulnerabilities or news MUST come from the DATA block or a look-up tool result, "
     "never from memory or a guess. If you did not look it up, do not state it as a fact.\n"
     "Context: use the recent chat and RECENT TRANSACTIONS to understand short references (\"both\", \"that one\", \"the last "
@@ -145,22 +152,115 @@ SYSTEM = (
 )
 
 
+def strip_thinking_and_tool_tags(text: str) -> str:
+    """Strip reasoning and tool markup tags so raw tags never leak to the user."""
+    clean = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL | re.IGNORECASE)
+    clean = re.sub(r"<[^>]*DSML[^>]*>", "", clean, flags=re.IGNORECASE)
+    clean = re.sub(r"</?[^>]*invoke[^>]*>", "", clean, flags=re.IGNORECASE)
+    clean = re.sub(r"</?[^>]*parameter[^>]*>", "", clean, flags=re.IGNORECASE)
+    clean = re.sub(r"</?[^>]*tool_call[^>]*>", "", clean, flags=re.IGNORECASE)
+    clean = re.sub(r"</?[^>]*calls[^>]*>", "", clean, flags=re.IGNORECASE)
+    return clean.strip()
+
+
+def parse_dsml_or_xml_tool(text: str) -> tuple[str, dict[str, Any]] | None:
+    """Extract tool calls from DeepSeek DSML or XML-style invocation tags."""
+    invoke_re = re.compile(
+        r"""<[^>]*?(?:invoke|function|tool_call)\s+name=['"]([^'"]+)['"][^>]*>(.*?)</[^>]*?(?:invoke|function|tool_call)>""",
+        re.DOTALL | re.IGNORECASE,
+    )
+    m = invoke_re.search(text)
+    if not m:
+        m = re.search(r"""<[^>]*?invoke\s+name=['"]([^'"]+)['"][^>]*>(.*)""", text, re.DOTALL | re.IGNORECASE)
+    if not m:
+        return None
+
+    tool_name = m.group(1).strip()
+    inner = m.group(2)
+
+    param_re = re.compile(
+        r"""<[^>]*?parameter\s+name=['"]([^'"]+)['"][^>]*>(.*?)</[^>]*?parameter>""",
+        re.DOTALL | re.IGNORECASE,
+    )
+    args: dict[str, Any] = {}
+    for pm in param_re.finditer(inner):
+        name = pm.group(1).strip()
+        val = pm.group(2).strip()
+        if val.lower() == "true":
+            args[name] = True
+        elif val.lower() == "false":
+            args[name] = False
+        elif re.fullmatch(r"-?\d+", val):
+            args[name] = int(val)
+        elif re.fullmatch(r"-?\d+\.\d+", val):
+            args[name] = float(val)
+        else:
+            args[name] = val
+
+    if not args and inner.strip():
+        raw_inner = inner.strip()
+        start = raw_inner.find("{")
+        end = raw_inner.rfind("}")
+        if start != -1 and end > start:
+            try:
+                j = json.loads(raw_inner[start : end + 1])
+                if isinstance(j, dict):
+                    args = j
+            except Exception:
+                pass
+
+    return tool_name, args
+
+
 def parse_step(raw: str) -> tuple[str, Any]:
-    """('say', text) | ('tool', (name, args)) | ('bad', None). Fences around the JSON are tolerated."""
-    try:
-        d = json.loads(raw.strip().removeprefix("```json").removeprefix("```").removesuffix("```").strip())
-    except (ValueError, AttributeError):
-        text = (raw or "").strip()
-        return ("say", text) if text and not text.startswith("{") else ("bad", None)  # plain prose is a reply
-    if not isinstance(d, dict):
+    """('say', text) | ('tool', (name, args)) | ('bad', None).
+    Supports JSON, DeepSeek DSML, and XML tool call formats; strips reasoning tags.
+    """
+    if not raw:
         return "bad", None
-    if isinstance(d.get("say"), str) and d["say"].strip():
-        return "say", d["say"].strip()
-    tool = d.get("tool")
-    if isinstance(tool, str):
-        if tool == "none":
-            return "say", str(d.get("say") or "").strip() or "Bisa dijelaskan lebih lanjut?"
-        return "tool", (tool, d.get("args") if isinstance(d.get("args"), dict) else {})
+
+    text = re.sub(r"<think>.*?</think>", "", raw, flags=re.DOTALL | re.IGNORECASE).strip()
+
+    dsml_tool = parse_dsml_or_xml_tool(text)
+    if dsml_tool is not None:
+        name, args = dsml_tool
+        return "tool", (name, args)
+
+    clean_json = text.strip()
+    if clean_json.startswith("```"):
+        clean_json = re.sub(r"^```[a-zA-Z]*\n?", "", clean_json)
+        clean_json = re.sub(r"\n?```$", "", clean_json).strip()
+
+    d = None
+    try:
+        d = json.loads(clean_json)
+    except (ValueError, AttributeError):
+        start = clean_json.find("{")
+        end = clean_json.rfind("}")
+        if start != -1 and end > start:
+            try:
+                d = json.loads(clean_json[start : end + 1])
+            except Exception:
+                pass
+
+    if d is not None:
+        if not isinstance(d, dict):
+            return "bad", None
+        if isinstance(d.get("say"), str) and d["say"].strip():
+            return "say", strip_thinking_and_tool_tags(d["say"])
+        tool = d.get("tool")
+        if isinstance(tool, str):
+            if tool == "none":
+                say_text = str(d.get("say") or "").strip() or "Bisa dijelaskan lebih lanjut?"
+                return "say", strip_thinking_and_tool_tags(say_text)
+            args = d.get("args") if isinstance(d.get("args"), dict) else {}
+            return "tool", (tool, args)
+        return "bad", None
+
+    cleaned_prose = strip_thinking_and_tool_tags(text)
+    if cleaned_prose and not (cleaned_prose.startswith("{") or cleaned_prose.startswith("[")):
+        return "say", cleaned_prose
+
     return "bad", None
 
 
@@ -220,17 +320,23 @@ async def converse(
 
     photos = vision.context_block(await vision.recent(redis), tz, reply_to)  # what they sent lately, so "look at the photo" and replies to it make sense
     transcript = [await _context(sm, tz, now, history_block, reply_to, **only), f"{photos}OWNER: {text}"]
+    cfg = await llm.config() if hasattr(llm, "config") else None
+    mult, _, _ = cfg.budget(ROUTINE, ASSISTANT_AGENT) if cfg is not None else (1.0, 16, 1.0)
+    cfg_tokens = getattr(cfg, "chat_max_tokens", 2500) if cfg is not None else 2500
+    effective_tokens = llm_config.scale_tokens(cfg_tokens, mult)
+    max_reply_chars = getattr(cfg, "chat_max_reply_chars", MAX_REPLY) if cfg is not None else MAX_REPLY
+
     tokens = 0
     for step in range(MAX_STEPS + 1):
         final = step == MAX_STEPS  # out of look-ups: the next answer must be words
         res = await llm.complete(
             ROUTINE, system, "\n\n".join(transcript) + ("\n\n(No more look-ups: answer now with {\"say\": ...}.)" if final else ""),
-            json_mode=True, max_tokens=1200, temperature=0.3, agent=ASSISTANT_AGENT,
+            json_mode=True, max_tokens=effective_tokens, temperature=0.3, agent=ASSISTANT_AGENT,
         )
         tokens += (res.prompt_tokens or 0) + (res.completion_tokens or 0)
         kind, value = parse_step(res.content)
         if kind == "say":
-            return value[:MAX_REPLY], tokens
+            return value[:max_reply_chars], tokens
         if kind == "bad":
             return "Maaf, saya belum paham. Bisa dijelaskan sedikit lebih jelas?", tokens
         name, args = value
@@ -279,14 +385,14 @@ async def converse(
             transcript += [f"TOOL look {json.dumps(args, ensure_ascii=False)[:160]}", f"RESULT:\n{result}"]
             continue
         if name in ("routine_add", "routine_delete") and not final:
-            return (await actions.propose_internal(sm, redis, name, args if isinstance(args, dict) else {}))[:MAX_REPLY], tokens
+            return (await actions.propose_internal(sm, redis, name, args if isinstance(args, dict) else {}))[:max_reply_chars], tokens
         if name == "mcp" and not final:
             from apa import mcp_client
 
             kind, text = await mcp_client.invoke(sm, redis, args)
             log.info("assistant_skill", kind=kind)
             if kind == "card":  # the owner must confirm first: the card is the whole reply
-                return text[:MAX_REPLY], tokens
+                return text[:max_reply_chars], tokens
             transcript += [f"TOOL mcp {json.dumps(args, ensure_ascii=False)[:200]}", f"RESULT:\n{text}"]
             continue
         if name == "gif" and not final:
@@ -347,6 +453,6 @@ async def converse(
             transcript += [f"TOOL {name} {json.dumps(args, ensure_ascii=False)[:200]}", f"RESULT:\n{result}"]
             continue
         if name in actions.TOOLS:  # a change: only ever a confirmation card
-            return (await actions.propose(sm, redis, json.dumps({"tool": name, "args": args})))[:MAX_REPLY], tokens
+            return (await actions.propose(sm, redis, json.dumps({"tool": name, "args": args})))[:max_reply_chars], tokens
         transcript += [f"TOOL {name}", "RESULT: unknown tool, use one from the list or answer with {\"say\": ...}"]
     return "Maaf, saya belum bisa menyelesaikannya. Coba tanyakan dengan cara lain?", tokens

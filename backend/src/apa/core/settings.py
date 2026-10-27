@@ -84,6 +84,14 @@ class Settings(BaseSettings):
     companion_max_per_day: int = 3
     # Raw chat text older than this many days is erased once the diary has captured it (0 = keep for ever)
     chat_keep_days: int = 7
+    # Chat output length & multi-part message settings
+    chat_max_tokens: int = 2500  # maximum tokens generated per chat response turn
+    chat_max_reply_chars: int = 15000  # maximum characters before safety cap (default 15,000 chars)
+    # multi-part Telegram messages when > 4000 chars instead of truncating
+    chat_split_long_messages: bool = True
+    # ActivityWatch (AW) live tracking integration
+    activitywatch_url: str = "http://localhost:5600"
+    activitywatch_enabled: bool = True
 
     # Safety defaults; the live values come from policy_rules (Web UI > Settings)
     undo_window_hours: int = 24

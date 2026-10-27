@@ -57,6 +57,45 @@ class LogNotifier:
         return None
 
 
+def split_telegram_text(text: str, max_chars: int = 4000) -> list[str]:
+    """Split text into chunks of at most max_chars without cutting mid-sentence or mid-paragraph."""
+    if not text or len(text) <= max_chars:
+        return [text] if text else [""]
+    chunks: list[str] = []
+    paragraphs = text.split("\n\n")
+    cur = ""
+    for para in paragraphs:
+        if len(para) > max_chars:
+            lines = para.split("\n")
+            for line in lines:
+                if len(line) > max_chars:
+                    words = line.split(" ")
+                    for w in words:
+                        candidate = f"{cur} {w}".strip() if cur else w
+                        if len(candidate) > max_chars and cur:
+                            chunks.append(cur)
+                            cur = w
+                        else:
+                            cur = candidate
+                else:
+                    candidate = f"{cur}\n{line}".strip() if cur else line
+                    if len(candidate) > max_chars and cur:
+                        chunks.append(cur)
+                        cur = line
+                    else:
+                        cur = candidate
+        else:
+            candidate = f"{cur}\n\n{para}".strip() if cur else para
+            if len(candidate) > max_chars and cur:
+                chunks.append(cur)
+                cur = para
+            else:
+                cur = candidate
+    if cur:
+        chunks.append(cur)
+    return chunks or [text]
+
+
 class TelegramNotifier:
     def __init__(self, bot, chat_id: int):
         self._bot = bot
@@ -75,8 +114,17 @@ class TelegramNotifier:
             except Exception as e:  # the link could not be fetched or shown: the words and the link still go out
                 log.warning("gif_send_failed", error=type(e).__name__)
                 text = f"{text}\n{animation}".strip()
-        message = await self._bot.send_message(self._chat_id, text, reply_markup=markup)
-        return message.message_id
+        from apa.core.settings import get_settings
+
+        split_enabled = getattr(get_settings(), "chat_split_long_messages", True)
+        chunks = split_telegram_text(text, max_chars=4000) if split_enabled else [text]
+        last_id = None
+        for i, chunk in enumerate(chunks):
+            # Only attach inline buttons/keyboard to the final message chunk
+            chunk_markup = markup if i == len(chunks) - 1 else None
+            message = await self._bot.send_message(self._chat_id, chunk, reply_markup=chunk_markup)
+            last_id = message.message_id
+        return last_id
 
     async def aclose(self) -> None:
         await self._bot.session.close()

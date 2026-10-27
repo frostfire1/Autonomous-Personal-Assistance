@@ -3,13 +3,13 @@
 import { useEffect, useState } from "react";
 import { api, post, put, useApi } from "@/lib/api";
 
-type Preset = "thrifty" | "normal" | "generous";
+type Preset = "thrifty" | "normal" | "generous" | "maximum";
 type Slot = { enabled: boolean; provider: string; model: string; preset: Preset };
 type PresetInfo = { key: Preset; label: string; tokens_pct: number; turns: number; context_pct: number };
 type Provider = { base_url: string; api_key_hint?: string };
 type Voice = { engine: string; gemini_model: string; custom_provider: string; custom_model: string; custom_voices: string[] };
 type Custom = { name: string; persona: string; hint: string; data: string[]; enabled: boolean; provider: string; model: string; preset: Preset };
-type Config = { providers: Record<string, Provider>; routes: Record<string, Slot>; agents: Record<string, Slot>; voice: Voice; custom: Record<string, Custom> };
+type Config = { providers: Record<string, Provider>; routes: Record<string, Slot>; agents: Record<string, Slot>; voice: Voice; custom: Record<string, Custom>; chat_max_tokens?: number; chat_max_reply_chars?: number; chat_split_long_messages?: boolean; };
 type View = {
   config: Config;
   routes: { key: string; label: string }[];
@@ -109,7 +109,7 @@ export default function ModelsPage() {
     const keep = (m: Record<string, Slot>) => Object.fromEntries(Object.entries(m).filter(([, s]) => !s.enabled || s.provider || (s.preset && s.preset !== "normal")));
     const providers = Object.fromEntries(Object.entries(cfg!.providers).map(([n, p]) => [n, { base_url: p.base_url, api_key: keys[n] }]));
     try {
-      await put("/llm", { providers, routes: keep(cfg!.routes), agents: keep(cfg!.agents), custom: cfg!.custom, voice: { ...cfg!.voice, custom_voices: voices.split(",").map((v) => v.trim()).filter(Boolean) } });
+      await put("/llm", { providers, routes: keep(cfg!.routes), agents: keep(cfg!.agents), custom: cfg!.custom, voice: { ...cfg!.voice, custom_voices: voices.split(",").map((v) => v.trim()).filter(Boolean) }, chat_max_tokens: cfg!.chat_max_tokens, chat_max_reply_chars: cfg!.chat_max_reply_chars, chat_split_long_messages: cfg!.chat_split_long_messages });
       setKeys({});
       setMsg("Saved. Applies within a few seconds, no restart needed.");
       reload();
@@ -172,6 +172,52 @@ export default function ModelsPage() {
         <b>Size</b> controls how much output each role or agent gets and how much recent chat it remembers.
         <i> Hemat</i> trims answers and context (cheaper, shorter), <i>Normal</i> is what the code was designed for, <i>Boros</i> gives longer answers and keeps more history. Hover a size to see the numbers.
       </p>
+
+      <h2>Chat Response Length & Anti-Cut Settings</h2>
+      <div className="card" style={{ marginBottom: 16 }}>
+        <p className="muted">
+          Control how long and detailed the assistant&apos;s responses can be. By default, responses are never cut: long answers automatically split into clean sequential messages on Telegram so you receive the complete reply.
+        </p>
+        <div className="row" style={{ gap: 16, alignItems: "center", flexWrap: "wrap", marginBottom: 12 }}>
+          <label style={{ display: "flex", alignItems: "center", gap: 8 }}>
+            <b>Max Tokens per Turn:</b>
+            <input
+              type="number"
+              min={500}
+              max={16000}
+              step={250}
+              value={cfg.chat_max_tokens ?? 2500}
+              onChange={(e) => setCfg({ ...cfg, chat_max_tokens: parseInt(e.target.value) || 2500 })}
+              style={{ width: 100 }}
+            />
+          </label>
+          <label style={{ display: "flex", alignItems: "center", gap: 8 }}>
+            <b>Max Character Cap:</b>
+            <input
+              type="number"
+              min={2000}
+              max={50000}
+              step={1000}
+              value={cfg.chat_max_reply_chars ?? 15000}
+              onChange={(e) => setCfg({ ...cfg, chat_max_reply_chars: parseInt(e.target.value) || 15000 })}
+              style={{ width: 110 }}
+            />
+          </label>
+        </div>
+        <div className="row">
+          <label style={{ display: "flex", alignItems: "center", gap: 8 }}>
+            <input
+              type="checkbox"
+              checked={cfg.chat_split_long_messages ?? true}
+              onChange={(e) => setCfg({ ...cfg, chat_split_long_messages: e.target.checked })}
+            />
+            <b>Auto-split long messages for Telegram (Never cut off text)</b>
+          </label>
+        </div>
+        <p className="muted" style={{ marginTop: 8 }}>
+          Tip: Set the Master Assistant (A-00) or any specialist preset to <b>Panjang</b> or <b>Tanpa Potong / Full</b> in the tables below for maximum detail without truncation.
+        </p>
+      </div>
 
       <h2>AI providers</h2>
       {names.map((n) => (
