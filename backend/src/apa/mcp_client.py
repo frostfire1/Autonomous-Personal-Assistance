@@ -139,8 +139,8 @@ async def connect(c: ServerCfg):
     """An open MCP client supporting Streamable HTTP and SSE transports (e.g. personal/FastMCP servers)."""
     import httpx2
     from mcp import Client
-    from mcp.client.streamable_http import streamable_http_client
     from mcp.client.sse import sse_client
+    from mcp.client.streamable_http import streamable_http_client
 
     auth = None
     try:
@@ -167,7 +167,7 @@ async def connect(c: ServerCfg):
         async with httpx2.AsyncClient(headers=headers, auth=auth, timeout=CALL_TIMEOUT_S) as http:
             async with Client(streamable_http_client(c.url, http_client=http)) as client:
                 yield client
-    except Exception as exc:
+    except Exception:
         # Auto-fallback: try SSE transport if Streamable HTTP failed
         try:
             log.info("mcp_attempting_sse_fallback", url=c.url)

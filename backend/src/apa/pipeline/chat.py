@@ -105,7 +105,7 @@ async def run_chat(
                 raise LLMUnavailable(str(e)) from e
             reply, role, tokens = UNAVAILABLE, "unavailable_ai", 0
 
-    if not await _finish(sm, notifier, redis, event_id, clean.text, reply, role, tokens):
+    if not await _finish(sm, notifier, redis, event_id, clean.text, reply, role, tokens, llm=llm):
         return "skipped"
     return "answered"
 
@@ -121,6 +121,7 @@ async def _finish(
     tokens: int,
     *,
     reason: str | None = None,
+    llm: Any = None,
 ) -> bool:
     """Record the reply once (a racing worker loses), then send it. False if someone else already answered."""
     async with sm() as s:
@@ -146,10 +147,11 @@ async def _finish(
     log.info("chat_answered", event_id=event_id, role=role, tokens=tokens)
     if role not in ("injection", "unavailable_ai"):
         await remember(redis, user_text, reply)
-        from apa import followup
         from zoneinfo import ZoneInfo
+
+        from apa import followup
         s_tz = ZoneInfo(get_settings().timezone)
-        await followup.schedule_if_active_situation(redis, user_text, reply, s_tz, datetime.now(s_tz))
+        await followup.schedule_if_active_situation(redis, user_text, reply, s_tz, datetime.now(s_tz), llm=llm)
     await send_and_record(sm, notifier, tm_id, reply)
     return True
 

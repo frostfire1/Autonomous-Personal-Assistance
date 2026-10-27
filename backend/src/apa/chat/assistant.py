@@ -40,6 +40,7 @@ MEMORY_TOOL_DOC = """Memory tools (they take effect at once; then answer):
 - research {"topic": string}  deep asynchronous web research (takes a few minutes; full report arrives later). NOTE: for travel routes, locations, places, or quick facts, USE 'maps' OR 'search' FIRST to answer immediately in this chat turn! Never make the owner wait for simple lookups.
 - search {"query": string}  instant real-time web search for facts, locations, prices, articles with links.
 - maps {"origin": string?, "destination": string?, "query": string?}  route directions, transit options, travel times, and Google Maps links.
+- followup {"topic": string, "delay_minutes": number, "hint": string}  schedule an autonomous proactive check-in (after 15-60 mins) when the owner has an ongoing or pending situation (e.g. working late, travelling/commute, early schedule tomorrow, unwell, or waiting on something). Describe what to check on and what proactive action to offer in 'hint'.
 - research_last {}  the latest research report and its links, for a follow-up question
 - routine_add {"name": string, "kind": "remind"|"ask"|"tool", "at": "HH:MM" (24 h, the owner's time) or "every_min": 15+, "days": [0-6]? (0=Mon; empty = every day), "text": string (the reminder, or the task for you), "server"+"tool"+"arguments" (kind tool: one skill, run on its own at that time)}
   create a scheduled routine when the owner asks for a reminder, a recurring task or an automation ("remind me to log lunch at 12:30 every day"). The owner sees a card and must confirm.
@@ -293,6 +294,28 @@ async def converse(
 
             result = await gif.tool(redis, args.get("query"))
             transcript += [f"TOOL gif {json.dumps(args, ensure_ascii=False)[:120]}", f"RESULT:\n{result}"]
+            continue
+        if name == "followup" and not final:
+            from apa import followup
+
+            topic_arg = str(args.get("topic", "active_situation"))
+            delay_arg = int(args.get("delay_minutes", 30))
+            hint_arg = str(args.get("hint", ""))
+            if redis is not None:
+                await followup.schedule_if_active_situation(
+                    redis,
+                    text,
+                    "",
+                    tz,
+                    now,
+                    force_topic=topic_arg,
+                    delay_minutes=delay_arg,
+                    hint=hint_arg,
+                )
+            transcript += [
+                f"TOOL followup {json.dumps(args, ensure_ascii=False)[:160]}",
+                f"RESULT: Proactive follow-up scheduled for '{topic_arg}' in {delay_arg}m.",
+            ]
             continue
         if name in ("research", "research_last") and not final:
             from apa import research

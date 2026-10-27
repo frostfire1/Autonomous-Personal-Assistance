@@ -10,7 +10,7 @@ from unittest.mock import MagicMock, patch
 TOOLS_DIR = Path(__file__).resolve().parent.parent.parent / "tools"
 sys.path.insert(0, str(TOOLS_DIR))
 
-import laptop_watcher
+import laptop_watcher  # noqa: E402
 
 
 def test_test_connection_success():

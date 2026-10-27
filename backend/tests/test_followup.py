@@ -1,10 +1,8 @@
 """Tests for autonomous proactive task follow-up engine and research fallback."""
 import asyncio
 import json
-import time
 from datetime import UTC, datetime, timedelta
 from zoneinfo import ZoneInfo
-import pytest
 
 from apa import followup
 
@@ -82,6 +80,22 @@ def test_schedule_if_active_situation():
     ))
     # It overwrote with nothing since False
     assert scheduled3 is False
+
+    # 4. Global / English in-progress situation
+    scheduled4 = asyncio.run(followup.schedule_if_active_situation(
+        redis, "still at the office debugging code", "Take your time.", tz, now
+    ))
+    assert scheduled4 is True
+    d4 = json.loads(asyncio.run(redis.get(followup.ACTIVE_KEY)))
+    assert d4["topic"] in ("office_late", "in_progress")
+
+    # 5. Global / English upcoming travel/schedule
+    scheduled5 = asyncio.run(followup.schedule_if_active_situation(
+        redis, "flight tomorrow at 6am to Tokyo", "Have a great flight.", tz, now
+    ))
+    assert scheduled5 is True
+    d5 = json.loads(asyncio.run(redis.get(followup.ACTIVE_KEY)))
+    assert d5["topic"] in ("early_morning_plan", "upcoming_schedule")
 
 
 def test_dismiss_pending():
@@ -169,8 +183,8 @@ def test_check_and_run_followup_due_and_sent(monkeypatch):
 
 def test_research_run_fallback_on_failure(monkeypatch):
     """When research.run fails, research_run falls back to search_web & maps without erroring."""
-    from apa.workers import settings as ws
     from apa import research
+    from apa.workers import settings as ws
 
     notifier = FakeNotifier()
     redis = FakeRedis()
@@ -222,3 +236,29 @@ def test_research_run_fallback_on_failure(monkeypatch):
     # Verify the message sent is informative, NOT "Maaf, aku belum berhasil..."
     assert "belum berhasil" not in notifier.sent[0]
     assert "Mikrotrans" in notifier.sent[0] or "TransSemarang" in notifier.sent[0]
+
+
+def test_dynamic_situation_eval_and_live_context():
+    tz = ZoneInfo("Asia/Jakarta")
+    now = datetime.now(tz)
+    redis = FakeRedis()
+
+    # Dynamic LLM evaluation returning JSON
+    eval_json = '{"active": true, "topic": "work_late", "delay_minutes": 25, "hint": "Debugging backend issues."}'
+    llm = FakeLlm(reply=eval_json)
+
+    scheduled = asyncio.run(followup.schedule_if_active_situation(
+        redis, "still debugging code", "Keep going.", tz, now, llm=llm
+    ))
+    assert scheduled is True
+    raw = asyncio.run(redis.get(followup.ACTIVE_KEY))
+    assert raw is not None
+    data = json.loads(raw)
+    assert data["topic"] == "work_late"
+    assert data["context_hint"] == "Debugging backend issues."
+
+    # Test live context gathering fails open safely
+    live_ctx = asyncio.run(followup._gather_live_context(None, tz, now))
+    assert "desktop" in live_ctx
+    assert "transactions" in live_ctx
+    assert "sleep" in live_ctx

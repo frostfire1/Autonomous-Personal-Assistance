@@ -93,7 +93,9 @@ async def geocode(place: str) -> dict[str, Any] | None:
     return None
 
 
-async def get_route(origin_coords: tuple[float, float], dest_coords: tuple[float, float]) -> tuple[float, float] | None:
+async def get_route(
+    origin_coords: tuple[float, float], dest_coords: tuple[float, float]
+) -> tuple[float, float] | None:
     """Calculate driving distance (km) and duration (mins) using OSRM."""
     lat1, lon1 = origin_coords
     lat2, lon2 = dest_coords
@@ -189,7 +191,10 @@ async def route_directions(origin: str, destination: str, mode: str = "transit")
         f"📍 Dari: {orig_name[:70]}",
         f"🎯 Ke: {dest_name[:70]}",
         f"📏 Jarak Tempuh: ~{dist_km:.1f} km",
-        f"⏱ Waktu Tempuh Kendaraan: ~{dur_mins:.0f} - {dur_mins + 15:.0f} menit (tergantung kondisi lalu lintas)",
+        (
+            f"⏱ Waktu Tempuh Kendaraan: ~{dur_mins:.0f} - {dur_mins + 15:.0f} menit "
+            "(tergantung kondisi lalu lintas)"
+        ),
         "",
         "OPSI ANGKUTAN & PERBANDINGAN BIAYA (Termurah s/d Tercepat):",
         f"1. 🚌 TransJakarta (Paling Hemat): Rp {tj_fare:,} (flat).",

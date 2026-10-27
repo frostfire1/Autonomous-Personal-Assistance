@@ -1,14 +1,13 @@
 """Unit tests for the search and maps tools."""
 
-import asyncio
 from datetime import UTC, datetime
-from zoneinfo import ZoneInfo
 from unittest.mock import AsyncMock, patch
+from zoneinfo import ZoneInfo
 
 import pytest
 
-from apa.chat.tools import READ_TOOLS, run_read
 from apa import maps, search
+from apa.chat.tools import READ_TOOLS, run_read
 
 
 def test_search_and_maps_registered_in_read_tools():

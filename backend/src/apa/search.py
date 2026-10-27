@@ -11,10 +11,8 @@ immediate answers with links, rather than waiting for a background research job.
 """
 
 import base64
-import json
 import re
-from typing import Any
-from urllib.parse import quote, unquote
+from urllib.parse import quote
 
 import httpx
 
@@ -34,7 +32,10 @@ WIKI_HEADERS = {
 }
 
 WEB_HEADERS = {
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+    "User-Agent": (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+        "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+    ),
     "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
     "Accept-Language": "id,en;q=0.9",
 }
@@ -69,7 +70,13 @@ async def _search_brave(query: str, key: str, count: int = 4) -> list[dict[str, 
     async with httpx.AsyncClient(timeout=TIMEOUT_S) as http:
         r = await http.get(
             "https://api.search.brave.com/res/v1/web/search",
-            params={"q": query, "count": count, "country": "ID", "search_lang": "id", "safesearch": "moderate"},
+            params={
+                "q": query,
+                "count": count,
+                "country": "ID",
+                "search_lang": "id",
+                "safesearch": "moderate",
+            },
             headers={"X-Subscription-Token": key, "Accept": "application/json"},
         )
     if r.status_code != 200:

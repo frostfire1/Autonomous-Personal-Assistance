@@ -2,10 +2,9 @@
 import asyncio
 from datetime import UTC, datetime
 from zoneinfo import ZoneInfo
-import pytest
 
-from apa.chat import actions, agent, assistant
-from apa.chat.agent import GROUNDED, ROLE_HINT, PERSONA_EXTRA
+from apa.chat import agent, assistant
+from apa.chat.agent import GROUNDED, PERSONA_EXTRA, ROLE_HINT
 from apa.pipeline import chat
 
 

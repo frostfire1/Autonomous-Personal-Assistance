@@ -1,7 +1,5 @@
 """Tests for enhanced MCP client supporting SSE, auto-all-read policy, and personal servers."""
 import asyncio
-from unittest.mock import AsyncMock, patch
-import pytest
 
 from apa import mcp_client
 

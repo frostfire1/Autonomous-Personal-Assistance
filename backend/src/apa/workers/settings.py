@@ -442,9 +442,10 @@ async def research_run(ctx: dict, topic: str) -> str:
     except research.ResearchError as exc:
         log.warning("research_fallback_triggered", error=str(exc)[:120], topic=topic)
         try:
-            from apa.search import search_web
-            from apa.maps import route_directions
             import re
+
+            from apa.maps import route_directions
+            from apa.search import search_web
             search_res = await search_web(topic, max_results=5)
             transit_info = ""
             route_match = re.search(r"dari\s+([\w\s]+?)\s+ke\s+([\w\s]+)", topic, re.I)
