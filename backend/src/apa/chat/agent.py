@@ -23,7 +23,7 @@ from apa.integrations.llm import LLMClient, LLMDisabled
 
 log = get_logger(__name__)
 
-MAX_REPLY = 2500
+MAX_REPLY = 15000
 HISTORY_KEY = "apa:chat:history"  # the owner's ordinary chat only; /private never touches Redis
 # What the dashboard preset can show at most. Redis always keeps enough turns for the biggest preset ("generous" = 32),
 # so switching to a bigger preset later immediately gives the assistant more memory instead of waiting for new turns.

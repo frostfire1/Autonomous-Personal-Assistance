@@ -171,6 +171,13 @@ export default function SettingsPage() {
         </div>
       )}
 
+      <h2>Chat Response Length & Output Settings</h2>
+      <div className="card" style={{ marginBottom: 16 }}>
+        <p className="muted">
+          Looking to change how long the assistant speaks or make sure answers are never cut off? Configure token generation limits, character caps, and the &quot;Tanpa Potong / Full&quot; mode under <a href="/models"><b>AI Models &gt; Chat Response Length</b></a>.
+        </p>
+      </div>
+
       <h2>What the assistant knows about you</h2>
       <div className="card">
         <p className="muted">

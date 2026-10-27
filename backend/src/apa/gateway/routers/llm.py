@@ -55,6 +55,9 @@ class LLMIn(BaseModel):
     agents: dict[str, C.Slot] = Field(default_factory=dict)
     voice: C.VoiceCfg = Field(default_factory=C.VoiceCfg)
     custom: dict[str, C.CustomAgent] = Field(default_factory=dict)
+    chat_max_tokens: int | None = None
+    chat_max_reply_chars: int | None = None
+    chat_split_long_messages: bool | None = None
 
 
 @router.put("")
@@ -64,8 +67,31 @@ async def put_llm(body: LLMIn) -> dict:
     for name, p in body.providers.items():
         key = p.api_key if p.api_key is not None else (old.providers[name].api_key if name in old.providers else "")
         provs[name] = {"base_url": p.base_url, "api_key": key}
+    kwargs = {}
+    if body.chat_max_tokens is not None:
+        kwargs["chat_max_tokens"] = body.chat_max_tokens
+    elif hasattr(old, "chat_max_tokens"):
+        kwargs["chat_max_tokens"] = old.chat_max_tokens
+
+    if body.chat_max_reply_chars is not None:
+        kwargs["chat_max_reply_chars"] = body.chat_max_reply_chars
+    elif hasattr(old, "chat_max_reply_chars"):
+        kwargs["chat_max_reply_chars"] = old.chat_max_reply_chars
+
+    if body.chat_split_long_messages is not None:
+        kwargs["chat_split_long_messages"] = body.chat_split_long_messages
+    elif hasattr(old, "chat_split_long_messages"):
+        kwargs["chat_split_long_messages"] = old.chat_split_long_messages
+
     try:
-        new = C.LLMConfig(providers=provs, routes=body.routes, agents=body.agents, voice=body.voice, custom=body.custom)
+        new = C.LLMConfig(
+            providers=provs,
+            routes=body.routes,
+            agents=body.agents,
+            voice=body.voice,
+            custom=body.custom,
+            **kwargs,
+        )
     except ValueError as e:
         raise HTTPException(422, reason(e)) from None
     for p in new.providers.values():

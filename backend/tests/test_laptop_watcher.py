@@ -94,3 +94,38 @@ def test_config_load_and_save(tmp_path, monkeypatch):
     assert loaded["server"] == "http://10.0.0.5:8000"
     assert loaded["key"] == "k1"
     assert loaded["device"] == "d1"
+
+
+def test_push_activitywatch_offline():
+    # If ActivityWatch is not running, push_activitywatch should return False quietly
+    err = urllib.error.URLError("Connection refused")
+    with patch("urllib.request.urlopen", side_effect=err):
+        ok = laptop_watcher.push_activitywatch("http://127.0.0.1:8000", "test-key", "", "laptop")
+        assert ok is False
+
+
+def test_push_activitywatch_success():
+    mock_info = MagicMock()
+    mock_info.read.return_value = b'{"hostname":"my-pc"}'
+    mock_info.__enter__.return_value = mock_info
+
+    mock_buckets = MagicMock()
+    mock_buckets.read.return_value = b'{"aw-watcher-window_pc":{},"aw-watcher-afk_pc":{}}'
+    mock_buckets.__enter__.return_value = mock_buckets
+
+    mock_afk = MagicMock()
+    mock_afk.read.return_value = b'[{"timestamp":"2026-10-27T17:15:00Z","data":{"status":"not-afk"}}]'
+    mock_afk.__enter__.return_value = mock_afk
+
+    mock_win = MagicMock()
+    mock_win.read.return_value = b'[{"timestamp":"2026-10-27T17:16:00Z","data":{"app":"Code.exe","title":"main.py"}}]'
+    mock_win.__enter__.return_value = mock_win
+
+    mock_server_post = MagicMock()
+    mock_server_post.read.return_value = b'{"ok":true}'
+    mock_server_post.__enter__.return_value = mock_server_post
+
+    side_effects = [mock_info, mock_buckets, mock_afk, mock_win, mock_server_post]
+    with patch("urllib.request.urlopen", side_effect=side_effects):
+        ok = laptop_watcher.push_activitywatch("http://127.0.0.1:8000", "test-key", "", "my-pc")
+        assert ok is True

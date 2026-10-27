@@ -459,6 +459,6 @@ def test_the_dashboard_sees_the_preset_choices_so_the_page_has_no_private_copy_o
 
     view = _view(LLMConfig())
     keys = {p["key"] for p in view["presets"]}
-    assert keys == {"thrifty", "normal", "generous"}
+    assert keys == {"thrifty", "normal", "generous", "maximum"}
     normal = next(p for p in view["presets"] if p["key"] == "normal")
     assert normal["tokens_pct"] == 100 and normal["turns"] == 16 and normal["context_pct"] == 100

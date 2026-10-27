@@ -3,6 +3,7 @@ import hmac
 import secrets
 import time
 from datetime import date, datetime
+from typing import Any
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
 from pydantic import BaseModel, Field
@@ -152,6 +153,35 @@ async def ingest_media(body: MediaIn) -> dict[str, object]:
     except assistant_memory.SecretsUnavailable:
         raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, "SECRETS_KEY is not set") from None
     return {"ok": True, "stored": stored}
+
+
+class AWPayloadIn(BaseModel):
+    hostname: str = "desktop"
+    afk_events: list[dict[str, Any]] = Field(default_factory=list)
+    win_events: list[dict[str, Any]] = Field(default_factory=list)
+    web_events: list[dict[str, Any]] = Field(default_factory=list)
+
+
+@router.post("/activitywatch", dependencies=[Depends(require_ingest_key)])
+async def ingest_activitywatch(body: AWPayloadIn, request: Request) -> dict[str, object]:
+    """Ingest ActivityWatch events from desktop tracker, deduplicate, update live activity,
+    and save YouTube media items."""
+    from zoneinfo import ZoneInfo
+
+    from apa import activitywatch
+    from apa.core.db import SessionLocal
+
+    redis = getattr(request.app.state, "arq", None) if hasattr(request.app, "state") else None
+    tz = ZoneInfo(get_settings().timezone)
+
+    raw = {
+        "hostname": body.hostname,
+        "afk_events": body.afk_events,
+        "win_events": body.win_events,
+        "web_events": body.web_events,
+    }
+    live = await activitywatch.process_aw_payload(SessionLocal, redis, tz, raw)
+    return {"ok": True, "live": live}
 
 
 @router.post(

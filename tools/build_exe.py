@@ -9,8 +9,6 @@ equipped with:
   - Silent foreground tracking & periodic push to /ingest/usage
 """
 
-import os
-import shutil
 import subprocess
 import sys
 from pathlib import Path

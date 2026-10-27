@@ -16,10 +16,13 @@ from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from apa import assistant_memory
 from apa.core.format import rupiah
+from apa.core.logging import get_logger
 from apa.db.models.budget import BudgetRule
 from apa.db.models.health import SleepSession
 from apa.db.models.ledger import CashWallet, Transaction
 from apa.db.models.ops import InboundEvent, TelegramMessage
+
+log = get_logger(__name__)
 
 MAX_RESULT_CHARS = 4000
 
@@ -107,7 +110,7 @@ READ_TOOL_DOC = """Look-up tools (read only; call one, you get the result, then 
 - cve {"limit": 1-10 (5)}  the newest high or critical vulnerabilities with the technology and versions
 - news {"topic": "nasional"|"cyber"|a topic id (nasional), "limit": 1-10 (5)}
 - recall {"query": string? (a word or phrase, or a time like "jam 9:20" or "tadi malam"), "days": 1-365 (30), "limit": 1-20 (12)}  search your diary, what you learned and the chat history of earlier days. Use this when the owner asks what you said or did at a specific time.
-- activity {"hours": 1-72 (24)}  the apps the owner used on laptop and phone, screen time by category, late-night active times (begadang), and latest media watched/listened to. Call this when asked about screen time, laptop apps, or what time they were up late.
+- activity {"hours": 1-72 (24)}  real-time ActivityWatch data: live active window/app on screen right now ("di jam sekarang", "aku lagi apa", "aku liat apa"), whether the owner is active/awake or away (AFK status), what YouTube video they are currently watching or last watched, and laptop/phone app usage. Always call this when asked what the owner is doing right now, what they are watching on YouTube, or if they are still awake.
 - profile {}  the owner's patterns computed from their data: sleep, when they are active, what and when they eat, spending, steps, stress, interests
 - search {"query": string, "limit": 1-10 (5)}  fast real-time search on the web and Wikipedia for facts, prices, definitions, or news. Use this when the owner asks to search, look something up, or asks about external facts.
 - maps {"origin": string?, "destination": string?, "query": string?, "mode": "transit"|"motor"|"driving"|"walking" (transit)}  look up a place or get directions/routes, distance, travel duration, transit options (KRL, TransJakarta, Gojek/Grab), and clickable Google Maps links.
@@ -281,14 +284,59 @@ async def _recall(sm, tz, now, a: RecallQ) -> str:
 
 
 async def _activity(sm, tz, now, a: ActivityQ) -> str:
-    from apa import assistant_memory, usage
+    from apa import activitywatch, assistant_memory, usage
 
-    rows = await usage.recent(sm, 2, now.date())
-    if not rows:
+    parts = []
+
+    # 1. Real-time ActivityWatch live status (current window, AFK status, live YouTube tab)
+    live: dict = {}
+    try:
+        live = await activitywatch.sync_activitywatch_to_memory(sm, None, tz)
+        if live.get("online"):
+            hostname = live.get("hostname", "laptop")
+            is_awake = live.get("is_awake", True)
+            afk_since = live.get("afk_since", "")
+            afk_desc = (
+                f"AKTIF & MELEK (tidak AFK, input aktif di laptop sejak {afk_since} WIB)"
+                if is_awake
+                else f"AFK / Away sejak {afk_since} WIB"
+            )
+            act_win = live.get("active_window", {})
+            cur_app = act_win.get("app", "")
+            cur_title = act_win.get("title", "")
+            clean_win = activitywatch.clean_youtube_title(cur_title) if cur_title else ""
+
+            live_lines = [
+                "🟢 STATUS AKTIF SAAT INI (REAL-TIME ACTIVITYWATCH):",
+                f"- Perangkat: laptop {hostname}",
+                f"- Status Pengguna: {afk_desc}",
+            ]
+            if cur_app:
+                live_lines.append(f"- Aplikasi Aktif di Layar Sekarang: {cur_app} (pukul {act_win.get('time', '')} WIB)")
+            if cur_title:
+                live_lines.append(f"- Jendela / Tab Browser Terbuka: «{clean_win or cur_title[:100]}»")
+
+            yt = live.get("latest_youtube")
+            if yt:
+                audible_tag = " (sedang memutar video/suara)" if yt.get("audible") else ""
+                live_lines.append(
+                    f"- YouTube Terakhir / Sedang Dibuka: «{yt['title']}» pada jam {yt['time']} WIB{audible_tag}"
+                )
+
+            parts.append("\n".join(live_lines))
+    except Exception as exc:
+        log.debug("live_aw_sync_failed: %s", exc)
+
+    rows = []
+    try:
+        rows = await usage.recent(sm, 2, now.date())
+    except Exception as exc:
+        log.debug("usage_recent_failed: %s", exc)
+
+    if not rows and not live.get("online"):
         return "No app usage has been reported yet (the phone app or the computer script must send it)."
     cutoff = now - timedelta(hours=a.hours)
     used = sorted((r for r in rows if r.last_at and r.last_at >= cutoff and usage.meaningful(r.app, r.seconds)), key=lambda r: r.last_at, reverse=True)
-    parts = []
 
     # 1. Late-night active window check (22:00 - 05:00)
     late_rows = [
@@ -332,7 +380,11 @@ async def _activity(sm, tz, now, a: ActivityQ) -> str:
 
     # 5. Media & content
     kinds = ("watched", "listened", "liked", "saved", "uploaded", "searched")
-    items = sorted((w for w in await assistant_memory.watched(sm, 3, now.date()) if w["k"] in kinds), key=lambda w: (w["date"], w.get("at") or ""))[-6:]
+    items = []
+    try:
+        items = sorted((w for w in await assistant_memory.watched(sm, 3, now.date()) if w["k"] in kinds), key=lambda w: (w["date"], w.get("at") or ""))[-8:]
+    except Exception as exc:
+        log.debug("watched_fetch_failed: %s", exc)
     if items:
         parts.append("LATEST CONTENT (YouTube, music; newest last):\n" + "\n".join(
             f"- [{w['k']}] {w.get('t', '')} - {w.get('c', '')} ({w['date']:%d/%m}{' ' + w['at'] if w.get('at') else ''})" for w in items))

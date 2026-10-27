@@ -34,7 +34,7 @@ import urllib.error
 import urllib.request
 import webbrowser
 from collections import defaultdict
-from datetime import date, datetime, timedelta
+from datetime import date, datetime
 from pathlib import Path
 from typing import Any
 
@@ -53,8 +53,8 @@ else:
 
 # Optional GUI & Tray libraries
 try:
-    from PIL import Image, ImageDraw
     import pystray
+    from PIL import Image, ImageDraw
     TRAY_AVAILABLE = True
 except ImportError:
     Image = None
@@ -64,7 +64,7 @@ except ImportError:
 
 try:
     import tkinter as tk
-    from tkinter import ttk, messagebox
+    from tkinter import messagebox, ttk
     TK_AVAILABLE = True
 except ImportError:
     tk = None
@@ -381,6 +381,80 @@ def push_usage(server: str, key: str, secret: str, device: str, kind: str, day: 
         return False
 
 
+def push_activitywatch(server: str, key: str, secret: str, device: str, aw_url: str = "http://localhost:5600") -> bool:
+    """Fetch recent ActivityWatch events (AFK, active window, web/YouTube) and push to APA server."""
+    base = aw_url.rstrip("/")
+    api_url = f"{base}/api/0" if not base.endswith("/api/0") else base
+    try:
+        req_info = urllib.request.Request(f"{api_url}/info", headers={"User-Agent": "APA-Tracker/1.0"})
+        with urllib.request.urlopen(req_info, timeout=1.5) as resp:
+            info = json.loads(resp.read().decode("utf-8", errors="ignore"))
+            hostname = info.get("hostname", device)
+
+        req_b = urllib.request.Request(f"{api_url}/buckets/", headers={"User-Agent": "APA-Tracker/1.0"})
+        with urllib.request.urlopen(req_b, timeout=2.0) as resp:
+            buckets = json.loads(resp.read().decode("utf-8", errors="ignore"))
+
+        afk_bucket = next((k for k in buckets if "afk" in k), None)
+        afk_events = []
+        if afk_bucket:
+            try:
+                r_afk = urllib.request.Request(f"{api_url}/buckets/{afk_bucket}/events?limit=5", headers={"User-Agent": "APA-Tracker/1.0"})
+                with urllib.request.urlopen(r_afk, timeout=2.0) as r:
+                    afk_events = json.loads(r.read().decode("utf-8", errors="ignore"))
+            except Exception:
+                pass
+
+        win_bucket = next((k for k in buckets if "window" in k), None)
+        win_events = []
+        if win_bucket:
+            try:
+                r_win = urllib.request.Request(f"{api_url}/buckets/{win_bucket}/events?limit=15", headers={"User-Agent": "APA-Tracker/1.0"})
+                with urllib.request.urlopen(r_win, timeout=2.0) as r:
+                    win_events = json.loads(r.read().decode("utf-8", errors="ignore"))
+            except Exception:
+                pass
+
+        web_events = []
+        for b in [k for k in buckets if "web" in k]:
+            try:
+                r_web = urllib.request.Request(f"{api_url}/buckets/{b}/events?limit=25", headers={"User-Agent": "APA-Tracker/1.0"})
+                with urllib.request.urlopen(r_web, timeout=2.0) as r:
+                    evs = json.loads(r.read().decode("utf-8", errors="ignore"))
+                    for ev in evs:
+                        ev["_bucket"] = b
+                        web_events.append(ev)
+            except Exception:
+                pass
+
+        payload = {
+            "hostname": hostname,
+            "afk_events": afk_events,
+            "win_events": win_events,
+            "web_events": web_events,
+        }
+        body = json.dumps(payload).encode("utf-8")
+        path = "/ingest/activitywatch"
+        headers = {
+            "X-API-Key": key,
+            "Content-Type": "application/json",
+            "User-Agent": "APA-Tracker/1.0",
+        }
+        if secret:
+            ts = str(int(time.time()))
+            headers["X-Timestamp"] = ts
+            headers["X-Signature"] = hmac.new(secret.encode(), f"{ts}.POST.{path}.".encode() + body, hashlib.sha256).hexdigest()
+
+        req = urllib.request.Request(server.rstrip("/") + path, data=body, method="POST", headers=headers)
+        with urllib.request.urlopen(req, timeout=10) as r:
+            res = json.loads(r.read().decode("utf-8", errors="ignore"))
+            logging.info(f"Pushed ActivityWatch events: {res.get('ok')}")
+            return True
+    except Exception as exc:
+        logging.debug(f"ActivityWatch push skipped or failed: {exc}")
+        return False
+
+
 # ---- Icon & Tray Resources --------------------------------------------------
 
 
@@ -623,6 +697,7 @@ class LaptopTrackerApp:
         self.apps_data: dict[str, dict] = defaultdict(lambda: {"seconds": 0, "first_at": None, "last_at": None})
         self.current_day: date = date.today()
         self.last_push_time = time.time()
+        self.last_aw_push_time = 0
         self.tray_icon = None
 
     def update_config(self, cfg: dict[str, Any]):
@@ -635,17 +710,19 @@ class LaptopTrackerApp:
         logging.info("Configuration updated in running tracker.")
 
     def sync_now(self) -> bool:
-        """Immediately flush tracked time to server."""
+        """Immediately flush tracked time and ActivityWatch events to server."""
         logging.info("Triggered immediate sync...")
         res = push_usage(self.server, self.key, self.secret, self.device, self.kind, self.current_day, self.apps_data)
+        push_activitywatch(self.server, self.key, self.secret, self.device)
         if res:
             self.last_push_time = time.time()
+        self.last_aw_push_time = time.time()
         return res
 
     def tracking_worker(self):
         """Worker thread sampling foreground app and periodically pushing."""
         setup_logger(foreground=True)
-        logging.info(f"=== APA Laptop Activity Tracker Started ===")
+        logging.info("=== APA Laptop Activity Tracker Started ===")
         logging.info(f"Device: {self.device} | Server: {self.server}")
 
         while self.is_running:
@@ -680,9 +757,13 @@ class LaptopTrackerApp:
                     app_time_str = f"{self.current_app_seconds // 60}m" if self.current_app_seconds >= 60 else f"{self.current_app_seconds}s"
                     self.tray_icon.title = f"APA Desktop Tracker\nStatus: Tracking\nActive: {self.current_app} ({app_time_str})"
 
-                # Periodic push
+                # Periodic usage push
                 if time.time() - self.last_push_time >= self.push_interval:
                     self.sync_now()
+                # Real-time ActivityWatch sync (every 25s for live window & YouTube awareness)
+                elif time.time() - self.last_aw_push_time >= 25:
+                    push_activitywatch(self.server, self.key, self.secret, self.device)
+                    self.last_aw_push_time = time.time()
             else:
                 self.current_app = "Tracking Paused"
                 if self.tray_icon:
@@ -823,7 +904,7 @@ def install_service(server: str, key: str, secret: str, device: str) -> None:
     print(f"Installing Windows Background Service ({TASK_NAME})...")
     res = os.system(cmd)
     if res == 0:
-        print(f"\n[SUCCESS] APA Laptop Service successfully installed!")
+        print("\n[SUCCESS] APA Laptop Service successfully installed!")
         print(f"- Config saved: {CONFIG_FILE}")
         print(f"- Log file: {LOG_FILE}")
         start_service()
@@ -862,7 +943,7 @@ def check_status():
     cmd = f'schtasks /Query /TN "{TASK_NAME}" /FO LIST'
     res = subprocess.run(cmd, shell=True, capture_output=True, text=True)
     if res.returncode == 0:
-        print(f"=== APA Laptop Service Status ===")
+        print("=== APA Laptop Service Status ===")
         print(res.stdout)
         if LOG_FILE.exists():
             print("--- Recent Log Entries (last 5 lines) ---")
