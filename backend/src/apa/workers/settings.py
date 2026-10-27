@@ -369,10 +369,19 @@ async def price_tick(ctx: dict) -> None:
 
 async def steward_tick(ctx: dict) -> None:
     """The data steward: repair what fell through (stuck messages, unread photos, uncategorised spending)."""
+    tz = ZoneInfo(get_settings().timezone)
     await run_steward(
         ctx.get("sessionmaker", SessionLocal), ctx["llm"], ctx["store"], ctx["notifier"], ctx.get("redis"),
-        tz=ZoneInfo(get_settings().timezone),
+        tz=tz,
     )
+    try:
+        from apa import followup
+        await followup.check_and_run_followup(
+            ctx.get("sessionmaker", SessionLocal), ctx.get("llm"), ctx.get("redis"),
+            ctx.get("notifier"), tz, datetime.now(tz),
+        )
+    except Exception as exc:
+        log.warning("followup_steward_failed", error=str(exc))
 
 
 async def _sync_youtube(sm: Any, now: datetime) -> None:
@@ -431,9 +440,34 @@ async def research_run(ctx: dict, topic: str) -> str:
     try:
         result = await research.run(topic)
     except research.ResearchError as exc:
-        log.warning("research_failed", error=str(exc)[:120])
-        await notifier.send(f"Maaf, aku belum berhasil mencari tentang «{topic[:80]}» ({exc}). Coba lagi nanti ya.")
-        return "failed"
+        log.warning("research_fallback_triggered", error=str(exc)[:120], topic=topic)
+        try:
+            from apa.search import search_web
+            from apa.maps import route_directions
+            import re
+            search_res = await search_web(topic, max_results=5)
+            transit_info = ""
+            route_match = re.search(r"dari\s+([\w\s]+?)\s+ke\s+([\w\s]+)", topic, re.I)
+            if route_match:
+                orig, dest = route_match.group(1).strip(), route_match.group(2).strip()
+                transit_info = await route_directions(orig, dest, mode="transit")
+
+            blocks = []
+            if transit_info:
+                blocks.append(f"Informasi Rute & Transportasi:\n{transit_info}")
+            if search_res.get("summary"):
+                blocks.append(f"Hasil Penelusuran Web:\n{search_res['summary']}")
+            if not blocks:
+                blocks.append(f"Penelusuran mengenai: {topic}")
+
+            result = {
+                "report": "\n\n".join(blocks),
+                "links": search_res.get("links", []),
+            }
+        except Exception as fb_exc:
+            log.warning("research_all_failed", error=str(fb_exc))
+            await notifier.send(f"Maaf, aku belum berhasil mencari tentang «{topic[:80]}». Coba lagi nanti ya.")
+            return "failed"
     text = await research.message_for(llm, await profile.style_guide(sm), topic, result)
     message_id = await notifier.send(text)
     await research.remember_report(redis, topic, result)
@@ -441,6 +475,18 @@ async def research_run(ctx: dict, topic: str) -> str:
     async with sm() as db:
         db.add(TelegramMessage(direction="out", chat_id=get_settings().telegram_owner_id or 0, message_id=message_id, kind="reply", body=text[:1500]))
         await db.commit()
+
+    if redis is not None:
+        try:
+            from apa import followup
+            tz = ZoneInfo(get_settings().timezone)
+            await followup.schedule_if_active_situation(
+                redis, f"Riset tentang {topic}", text, tz, datetime.now(tz),
+                force_topic=f"Hasil riset: {topic}", delay_minutes=45,
+                hint=f"Check in if Joe reviewed the research findings on '{topic}' and if he needs any reminders or next steps set up."
+            )
+        except Exception as exc:
+            log.warning("research_followup_schedule_failed", error=str(exc))
     return "sent"
 
 
@@ -523,6 +569,15 @@ async def routine_tick(ctx: dict) -> str:
 
     if ctx.get("notifier") is None:
         return "no_notifier"
+    try:
+        from apa import followup
+        tz = ZoneInfo(get_settings().timezone)
+        await followup.check_and_run_followup(
+            ctx.get("sessionmaker", SessionLocal), ctx.get("llm"), ctx.get("redis"),
+            ctx.get("notifier"), tz, datetime.now(tz),
+        )
+    except Exception as exc:
+        log.warning("followup_routine_tick_failed", error=str(exc))
     try:
         ran = await routines.tick(ctx)
     except Exception as exc:

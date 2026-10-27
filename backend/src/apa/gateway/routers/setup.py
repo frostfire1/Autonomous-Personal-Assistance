@@ -435,17 +435,18 @@ async def skills_refresh(server_id: str) -> dict:
 @router.put("/skills/{server_id}")
 async def skills_policy(server_id: str, enabled: bool | None = Body(default=None), tool: str | None = Body(default=None, max_length=80),
                         auto: bool | None = Body(default=None), off: bool | None = Body(default=None),
+                        auto_all_read: bool | None = Body(default=None),
                         role: str | None = Body(default=None, max_length=600), topics: list[str] | None = Body(default=None, max_length=30)) -> dict:
-    """Switch a server on or off, set a tool (`auto` = runs without asking, `off` = never runs), or make the server a specialist
+    """Switch a server on or off, set a tool (`auto` = runs without asking, `off` = never runs, `auto_all_read` = auto-allow all read tools), or make the server a specialist
     (`role`: how the assistant behaves while it is in charge; `topics`: words that hand the conversation to it)."""
     from apa import mcp_client
 
     if role is not None or topics is not None:
         if not await mcp_client.set_specialist(SessionLocal, server_id, role, topics):
             raise HTTPException(status_code=404, detail="no such server")
-    if enabled is None and tool is None and auto is None and off is None:
+    if enabled is None and tool is None and auto is None and off is None and auto_all_read is None:
         return {"ok": True}
-    if not await mcp_client.set_policy(SessionLocal, server_id, tool, auto=auto, off=off, enabled=enabled):
+    if not await mcp_client.set_policy(SessionLocal, server_id, tool, auto=auto, off=off, enabled=enabled, auto_all_read=auto_all_read):
         raise HTTPException(status_code=404, detail="no such server or tool")
     return {"ok": True}
 

@@ -98,6 +98,14 @@ def test_validation_rejects_short_idempotency_key(client):
     r = client.post("/ingest/notification", json={**BODY, "idempotency_key": "x"}, headers=HDR)
     assert r.status_code == 422
 
+def test_ingest_test_endpoint_connectivity_and_auth(client):
+    assert client.get("/ingest/test").status_code == 401
+    assert client.get("/ingest/test", headers={"x-api-key": "wrong"}).status_code == 401
+    r = client.get("/ingest/test", headers=HDR)
+    assert r.status_code == 200 and r.json()["ok"] is True
+    r2 = client.post("/ingest/test", headers=HDR)
+    assert r2.status_code == 200 and r2.json()["ok"] is True
+
 
 # ---- worker -----------------------------------------------------------------------------
 
@@ -330,7 +338,7 @@ def test_the_router_is_shown_the_recent_transactions_and_told_a_short_reference_
     got = asyncio.run(master.plan(Llm(), "2 2 nya dari kunci AI", [], has_draft=False, recent=recent))
     assert got.intent == "action" and seen["agent"] == "A-00"
     assert "RECENT_TRANSACTIONS:" in seen["user"] and "#7 - Rp 20.071" in seen["user"]
-    assert "labelling them" in seen["system"]
+    assert "ALWAYS" in seen["system"] and "action" in seen["system"]  # updated: stronger labelling detection
     asyncio.run(master.plan(Llm(), "hello", [], has_draft=False))
     assert "(none in the last 2 hours)" in seen["user"]
 
@@ -398,7 +406,7 @@ def test_the_assistant_asks_instead_of_failing_and_never_loops_forever(monkeypat
     assert "belum paham" in reply
     looping = ['{"tool": "budgets", "args": {}}'] * 10
     (reply, _), shown = _assistant(monkeypatch, looping + ['{"say": "ok"}'] * 3)
-    assert len(shown) <= 5 and ("belum bisa" in reply or reply == "ok")  # bounded number of look-ups
+    assert len(shown) <= 7 and ("belum bisa" in reply or reply == "ok")  # bounded: MAX_STEPS=6 so up to 7 calls
 
 
 def test_the_assistant_reads_prose_as_a_reply_and_unknown_tools_are_refused(monkeypatch):
@@ -420,9 +428,9 @@ def test_the_read_tools_validate_their_arguments_and_say_what_is_wrong():
     from apa.chat.tools import READ_TOOLS, run_read
 
     now, tz = datetime.now(UTC), ZoneInfo("Asia/Jakarta")
-    assert {"transactions", "spending", "budgets", "balances", "sleep", "cve", "news", "recall", "profile", "activity"} == set(READ_TOOLS)
+    assert {"transactions", "spending", "budgets", "balances", "sleep", "cve", "news", "recall", "profile", "activity", "search", "maps"} == set(READ_TOOLS)
     for name, args in (("transactions", {"days": 9999}), ("spending", {"period": "decade"}), ("sleep", {"days": 0}),
-                       ("news", {"limit": 99}), ("transactions", {"drop": "table"})):
+                       ("news", {"limit": 99}), ("search", {"limit": 99}), ("maps", {"mode": "invalid"}), ("transactions", {"drop": "table"})):
         assert asyncio.run(run_read(None, tz, now, name, args)).startswith("Bad arguments")
     assert asyncio.run(run_read(None, tz, now, "nope", {})) == "Unknown tool 'nope'."
 

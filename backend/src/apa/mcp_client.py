@@ -39,7 +39,7 @@ log = get_logger(__name__)
 RULE_KEY = "mcp_servers"
 CALL_TIMEOUT_S = 40
 MAX_RESULT = 3000
-CATALOG_CHARS = 2600
+CATALOG_CHARS = 4500
 MAX_SERVERS = 8
 CACHE_S = 10.0
 
@@ -136,10 +136,11 @@ def _headers(c: ServerCfg) -> dict[str, str]:
 
 @asynccontextmanager
 async def connect(c: ServerCfg):
-    """An open MCP client for a server (tests replace this with an in-process server)."""
+    """An open MCP client supporting Streamable HTTP and SSE transports (e.g. personal/FastMCP servers)."""
     import httpx2
     from mcp import Client
     from mcp.client.streamable_http import streamable_http_client
+    from mcp.client.sse import sse_client
 
     auth = None
     try:
@@ -150,9 +151,32 @@ async def connect(c: ServerCfg):
             auth = await mcp_oauth.saved_provider(c, SessionLocal)
     except secrets.SecretsUnavailable as e:
         raise McpError("The token cannot be read: SECRETS_KEY is missing or changed.") from e
-    async with httpx2.AsyncClient(headers=headers, auth=auth, timeout=CALL_TIMEOUT_S) as http:
-        async with Client(streamable_http_client(c.url, http_client=http)) as client:
-            yield client
+
+    # If the URL path indicates SSE transport (e.g. /sse), connect via SSE client
+    if "/sse" in c.url.lower():
+        try:
+            async with Client(sse_client(c.url, headers=headers, auth=auth, timeout=CALL_TIMEOUT_S)) as client:
+                yield client
+            return
+        except Exception as exc:
+            log.warning("mcp_sse_connect_failed", url=c.url, error=str(exc))
+            raise McpError(f"Could not connect via SSE: {exc}") from exc
+
+    # Default: Try Streamable HTTP
+    try:
+        async with httpx2.AsyncClient(headers=headers, auth=auth, timeout=CALL_TIMEOUT_S) as http:
+            async with Client(streamable_http_client(c.url, http_client=http)) as client:
+                yield client
+    except Exception as exc:
+        # Auto-fallback: try SSE transport if Streamable HTTP failed
+        try:
+            log.info("mcp_attempting_sse_fallback", url=c.url)
+            async with Client(sse_client(c.url, headers=headers, auth=auth, timeout=CALL_TIMEOUT_S)) as client:
+                yield client
+            return
+        except Exception:
+            pass
+        raise
 
 
 def _summary(tool: Any) -> dict:
@@ -217,13 +241,18 @@ async def remove(sm: async_sessionmaker, server_id: str) -> bool:
 
 
 async def set_policy(sm: async_sessionmaker, server_id: str, tool: str | None, *, auto: bool | None = None, off: bool | None = None,
-                     enabled: bool | None = None) -> bool:
+                     enabled: bool | None = None, auto_all_read: bool | None = None) -> bool:
     servers = await load(sm)
     c = next((x for x in servers if x.id == server_id), None)
     if c is None:
         return False
     if enabled is not None:
         c.enabled = enabled
+    if auto_all_read:
+        for t in c.tools:
+            name = t["name"]
+            if t.get("read_only") and name not in c.auto and name not in c.off:
+                c.auto.append(name)
     if tool is not None:
         if tool not in {t["name"] for t in c.tools}:
             return False

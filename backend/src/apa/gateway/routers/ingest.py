@@ -64,6 +64,12 @@ async def require_ingest_key(request: Request, x_api_key: str = Header(default="
         raise HTTPException(status.HTTP_429_TOO_MANY_REQUESTS, "slow down", headers={"Retry-After": "60"})
 
 
+@router.api_route("/test", methods=["GET", "POST"], dependencies=[Depends(require_ingest_key)])
+async def test_auth() -> dict[str, object]:
+    """Test endpoint for desktop/laptop trackers to verify connection, API key, & HMAC signature."""
+    return {"ok": True, "message": "Authentication successful", "ts": time.time()}
+
+
 class PackagesIn(BaseModel):
     apps: list[AppIn] = Field(max_length=100)
 

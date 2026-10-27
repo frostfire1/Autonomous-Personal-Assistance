@@ -4,6 +4,7 @@ figure in a reply always comes from the ledger, never from the model, and nothin
 
 Results are short and bounded (row limits, character caps); merchant names and headlines inside them are untrusted text."""
 
+import re
 from datetime import datetime, time, timedelta
 from decimal import Decimal
 from typing import Any, Literal
@@ -20,7 +21,7 @@ from apa.db.models.health import SleepSession
 from apa.db.models.ledger import CashWallet, Transaction
 from apa.db.models.ops import InboundEvent, TelegramMessage
 
-MAX_RESULT_CHARS = 2500
+MAX_RESULT_CHARS = 4000
 
 
 class _A(BaseModel):
@@ -34,7 +35,7 @@ class TransactionsQ(_A):
     direction: Literal["out", "in"] | None = None
     min_amount: Decimal | None = Field(default=None, ge=0)
     max_amount: Decimal | None = Field(default=None, ge=0)
-    limit: int = Field(default=10, ge=1, le=25)
+    limit: int = Field(default=15, ge=1, le=50)
 
 
 class SpendingQ(_A):
@@ -59,7 +60,7 @@ class NewsQ(_A):
 class RecallQ(_A):
     query: str | None = Field(default=None, max_length=60)
     days: int = Field(default=30, ge=1, le=365)
-    limit: int = Field(default=8, ge=1, le=15)
+    limit: int = Field(default=12, ge=1, le=20)
 
 
 class ActivityQ(_A):
@@ -68,6 +69,17 @@ class ActivityQ(_A):
 
 class NoArgs(_A):
     pass
+
+class SearchQ(_A):
+    query: str = Field(min_length=1, max_length=120)
+    limit: int = Field(default=5, ge=1, le=10)
+
+
+class MapsQ(_A):
+    origin: str | None = Field(default=None, max_length=100)
+    destination: str | None = Field(default=None, max_length=100)
+    query: str | None = Field(default=None, max_length=100)
+    mode: Literal["transit", "motor", "driving", "walking"] = "transit"
 
 
 READ_TOOLS: dict[str, type[_A]] = {
@@ -81,6 +93,8 @@ READ_TOOLS: dict[str, type[_A]] = {
     "recall": RecallQ,
     "profile": NoArgs,
     "activity": ActivityQ,
+    "search": SearchQ,
+    "maps": MapsQ,
 }
 
 # what the model is told about the read tools (the write tools are described by chat.actions.TOOL_SPEC)
@@ -92,9 +106,12 @@ READ_TOOL_DOC = """Look-up tools (read only; call one, you get the result, then 
 - sleep {"days": 1-30 (7)}
 - cve {"limit": 1-10 (5)}  the newest high or critical vulnerabilities with the technology and versions
 - news {"topic": "nasional"|"cyber"|a topic id (nasional), "limit": 1-10 (5)}
-- recall {"query": string? (a word or phrase), "days": 1-365 (30), "limit": 1-15 (8)}  search your diary, what you learned and the chat history of earlier days
-- activity {"hours": 1-72 (24)}  the apps the owner used most recently (phone and computer) with when they last used each, and the latest things they watched or listened to
-- profile {}  the owner's patterns computed from their data: sleep, when they are active, what and when they eat, spending, steps, stress, interests"""
+- recall {"query": string? (a word or phrase, or a time like "jam 9:20" or "tadi malam"), "days": 1-365 (30), "limit": 1-20 (12)}  search your diary, what you learned and the chat history of earlier days. Use this when the owner asks what you said or did at a specific time.
+- activity {"hours": 1-72 (24)}  the apps the owner used on laptop and phone, screen time by category, late-night active times (begadang), and latest media watched/listened to. Call this when asked about screen time, laptop apps, or what time they were up late.
+- profile {}  the owner's patterns computed from their data: sleep, when they are active, what and when they eat, spending, steps, stress, interests
+- search {"query": string, "limit": 1-10 (5)}  fast real-time search on the web and Wikipedia for facts, prices, definitions, or news. Use this when the owner asks to search, look something up, or asks about external facts.
+- maps {"origin": string?, "destination": string?, "query": string?, "mode": "transit"|"motor"|"driving"|"walking" (transit)}  look up a place or get directions/routes, distance, travel duration, transit options (KRL, TransJakarta, Gojek/Grab), and clickable Google Maps links.
+"""
 
 
 def _clip(text: str) -> str:
@@ -215,12 +232,30 @@ async def _recall(sm, tz, now, a: RecallQ) -> str:
     owner_q = select(InboundEvent).where(InboundEvent.source == "telegram_shorthand", InboundEvent.received_at >= since)
     bot_q = select(TelegramMessage).where(
         TelegramMessage.direction == "out", TelegramMessage.kind == "reply", TelegramMessage.created_at >= since)
+    # Time-aware: if query looks like a time (HH:MM or 'jam N'), also search by timestamp window
+    _time_re = re.compile(r'(?:jam\s*|pukul\s*)?(\d{1,2})[:.](\d{2})', re.I)
+    _time_match = _time_re.search(a.query or '')
+    _time_window_q_owner = None
+    _time_window_q_bot = None
+    if _time_match:
+        _h, _m = int(_time_match.group(1)), int(_time_match.group(2))
+        _window_lo = now.replace(hour=_h, minute=max(0, _m - 10), second=0, microsecond=0)
+        _window_hi = now.replace(hour=_h, minute=min(59, _m + 10), second=59, microsecond=0)
+        _time_window_q_owner = owner_q.where(InboundEvent.received_at.between(_window_lo, _window_hi))
+        _time_window_q_bot = bot_q.where(TelegramMessage.created_at.between(_window_lo, _window_hi))
     if like:
         owner_q = owner_q.where(InboundEvent.payload["text"].astext.ilike(like))
         bot_q = bot_q.where(TelegramMessage.body.ilike(like))
     async with sm() as s:
         owner = (await s.execute(owner_q.order_by(InboundEvent.received_at.desc()).limit(a.limit))).scalars().all()
         bot = (await s.execute(bot_q.order_by(TelegramMessage.created_at.desc()).limit(a.limit))).scalars().all()
+        if _time_match and _time_window_q_owner is not None:
+            owner_t = (await s.execute(_time_window_q_owner.order_by(InboundEvent.received_at.desc()).limit(a.limit))).scalars().all()
+            bot_t = (await s.execute(_time_window_q_bot.order_by(TelegramMessage.created_at.desc()).limit(a.limit))).scalars().all()
+            seen_o = {x.id for x in owner}
+            seen_b = {x.id for x in bot}
+            owner = list(owner) + [x for x in owner_t if x.id not in seen_o]
+            bot = list(bot) + [x for x in bot_t if x.id not in seen_b]
     chat = sorted(
         [(e.received_at, "OWNER", str(e.payload.get("text", ""))) for e in owner] + [(m.created_at, "APA", m.body or "") for m in bot],
         key=lambda x: x[0], reverse=True,
@@ -254,23 +289,55 @@ async def _activity(sm, tz, now, a: ActivityQ) -> str:
     cutoff = now - timedelta(hours=a.hours)
     used = sorted((r for r in rows if r.last_at and r.last_at >= cutoff and usage.meaningful(r.app, r.seconds)), key=lambda r: r.last_at, reverse=True)
     parts = []
+
+    # 1. Late-night active window check (22:00 - 05:00)
+    late_rows = [
+        r for r in rows
+        if r.last_at and (r.last_at.astimezone(tz).hour >= 22 or r.last_at.astimezone(tz).hour < 5)
+        and usage.meaningful(r.app, r.seconds)
+    ]
+    if late_rows:
+        latest_late = max(late_rows, key=lambda r: r.last_at)
+        late_top_apps = ", ".join(dict.fromkeys(r.app for r in sorted(late_rows, key=lambda r: r.seconds, reverse=True)[:3]))
+        parts.append(
+            f"🌙 AKTIVITAS TENGAH MALAM / BEGADANG (Pukul 22:00 - 05:00):\n"
+            f"- Terakhir terdeteksi aktif pada pukul {latest_late.last_at.astimezone(tz):%H:%M} WIB di perangkat '{latest_late.device}'.\n"
+            f"- Aplikasi utama yang dibuka larut malam: {late_top_apps}."
+        )
+
+    # 2. Apps used in the last N hours
     if used:
         parts.append(f"APPS USED IN THE LAST {a.hours} H, most recent first (local time):\n" + "\n".join(
             f"- {r.app} on {r.device}: used until {r.last_at.astimezone(tz):%d/%m %H:%M}"
             f"{', started ' + format(r.first_at.astimezone(tz), '%H:%M') if r.first_at else ''}, {round(r.seconds / 60)} min that day" for r in used[:10]))
     else:
         parts.append("No app has a recorded time in that window (older data has no timestamps, or nothing was used).")
+
+    # 3. Category breakdown for today
+    cat_durations: dict[str, int] = {}
+    for r in rows:
+        if r.day == now.date() and usage.meaningful(r.app, r.seconds):
+            cat = usage.category(r.app)
+            cat_durations[cat] = cat_durations.get(cat, 0) + r.seconds
+    if cat_durations:
+        summary_cats = ", ".join(f"{cat.title()}: {round(sec/60)}m" for cat, sec in sorted(cat_durations.items(), key=lambda x: x[1], reverse=True)[:4])
+        parts.append(f"TOTAL SCREEN TIME HARI INI: {summary_cats}")
+
+    # 4. Device report status
     seen: dict[str, datetime] = {}
     for r in rows:
         seen[r.device] = max(seen.get(r.device, r.updated_at), r.updated_at)
     parts.append("LAST REPORT FROM: " + ", ".join(f"{d} at {t.astimezone(tz):%d/%m %H:%M}" for d, t in seen.items())
-                 + " (devices report about every 30 minutes, so the last minutes may be missing)")
-    kinds = ("watched", "listened", "liked", "saved", "uploaded", "searched")  # what was watched or heard, not the channels followed
+                 + " (devices report about every 10-30 minutes)")
+
+    # 5. Media & content
+    kinds = ("watched", "listened", "liked", "saved", "uploaded", "searched")
     items = sorted((w for w in await assistant_memory.watched(sm, 3, now.date()) if w["k"] in kinds), key=lambda w: (w["date"], w.get("at") or ""))[-6:]
     if items:
         parts.append("LATEST CONTENT (YouTube, music; newest last):\n" + "\n".join(
             f"- [{w['k']}] {w.get('t', '')} - {w.get('c', '')} ({w['date']:%d/%m}{' ' + w['at'] if w.get('at') else ''})" for w in items))
-    return "\n".join(parts)
+
+    return "\n\n".join(parts)
 
 
 async def _profile(sm, tz, now, a: NoArgs) -> str:
@@ -282,12 +349,35 @@ async def _profile(sm, tz, now, a: NoArgs) -> str:
     return "\n".join(f"- {r['summary']} ({r['evidence']} observations)" for r in rows)
 
 
+
+async def _search(sm, tz, now, a: SearchQ) -> str:
+    from apa import search
+
+    return await search.run_search(a.query, limit=a.limit)
+
+
+async def _maps(sm, tz, now, a: MapsQ) -> str:
+    from apa import maps
+
+    if a.origin and a.destination:
+        return await maps.route_directions(a.origin, a.destination, mode=a.mode)
+    if a.query:
+        return await maps.search_place(a.query)
+    if a.destination:
+        return await maps.search_place(a.destination)
+    if a.origin:
+        return await maps.search_place(a.origin)
+    return "Tolong sebutkan lokasi atau rute (titik asal dan tujuan) untuk dicari di Google Maps."
+
+
 _RUN = {
     "recall": _recall,
     "activity": _activity,
     "profile": _profile,
     "transactions": _transactions, "spending": _spending, "budgets": _budgets, "balances": _balances,
     "sleep": _sleep, "cve": _cve, "news": _news,
+    "search": _search,
+    "maps": _maps,
 }
 
 
