@@ -1,0 +1,6 @@
+[2026-10-27 16:22:14,479] INFO: === APA Laptop Activity Tracker Started ===
+[2026-10-27 16:22:14,479] INFO: Device: Tribe-Acer-Windows | Server: http://192.168.2.191:8000
+[2026-10-27 16:27:14,525] INFO: Triggered immediate sync...
+[2026-10-27 16:27:14,619] INFO: Pushed 4 apps for 2026-10-27 (True)
+[2026-10-27 16:32:17,570] INFO: Triggered immediate sync...
+[2026-10-27 16:32:17,755] INFO: Pushed 4 apps for 2026-10-27 (True)
