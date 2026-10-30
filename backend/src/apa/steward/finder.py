@@ -97,7 +97,9 @@ async def find(sm: async_sessionmaker, now: datetime) -> list[Ticket]:
         )
         for e in stuck:
             st = _steward(e)
-            if st.get("reported") and st.get("gave_up"):
+            if st.get("reported") or st.get("gave_up"):
+                continue
+            if e.received_at < now - timedelta(hours=12):
                 continue
             n = (st.get("attempts") or {}).get("stuck", 0)
             if n < MAX_STUCK_ATTEMPTS:
@@ -142,16 +144,21 @@ async def find(sm: async_sessionmaker, now: datetime) -> list[Ticket]:
         )
         for e in photos:
             st = _steward(e)
-            if st.get("reported") and st.get("gave_up"):
+            if st.get("reported") or st.get("gave_up"):
                 continue
             p = e.payload or {}
+            reason = p.get("review_reason") or p.get("skip_reason") or e.error
+            if reason not in RETRYABLE_IMAGE and (
+                st.get("reported") or st.get("gave_up") or e.received_at < now - timedelta(hours=12)
+            ):
+                continue
             out.append(
                 Ticket(
                     "image",
                     event_id=e.id,
                     source=e.source,
                     status=e.status,
-                    reason=p.get("review_reason") or p.get("skip_reason") or e.error,
+                    reason=reason,
                     attempts=(st.get("attempts") or {}).get("image", 0),
                     gave_up=bool(st.get("gave_up")),
                     reported=bool(st.get("reported")),
@@ -168,20 +175,26 @@ async def find(sm: async_sessionmaker, now: datetime) -> list[Ticket]:
                         (Transaction.primary_category.is_(None))
                         | (Transaction.primary_category == "Uncategorized"),
                         Transaction.timestamp < now - timedelta(minutes=5),
+                        Transaction.timestamp > now - timedelta(days=7),
                     )
-                    .order_by(Transaction.id)
+                    .order_by(Transaction.id.desc())
                     .limit(PER_KIND)
                 )
             )
             .scalars()
             .all()
         )
-        done = await _repairs(s, [t.id for t in uncat], "repair:category")
-        out += [
-            Ticket("uncategorized", tx_id=t.id, attempts=done.get(t.id, 0))
-            for t in uncat
-            if done.get(t.id, 0) < MAX_CATEGORY_ATTEMPTS
-        ]
+        if uncat:
+            cat_repairs = await _repairs(s, [t.id for t in uncat], "repair:category")
+            for tx in uncat:
+                if cat_repairs.get(tx.id, 0) < MAX_CATEGORY_ATTEMPTS:
+                    out.append(
+                        Ticket(
+                            "uncategorized",
+                            tx_id=tx.id,
+                            attempts=cat_repairs.get(tx.id, 0),
+                        )
+                    )
 
         held = (
             (
@@ -191,6 +204,7 @@ async def find(sm: async_sessionmaker, now: datetime) -> list[Ticket]:
                         Transaction.status == "quarantined",
                         Transaction.notes == "quarantined: no_quorum",
                         Transaction.timestamp < now - HELD_WAIT,
+                        Transaction.timestamp > now - timedelta(days=2),
                     )
                     .order_by(Transaction.id)
                     .limit(PER_KIND)
@@ -199,10 +213,10 @@ async def find(sm: async_sessionmaker, now: datetime) -> list[Ticket]:
             .scalars()
             .all()
         )
-        done = await _repairs(s, [t.id for t in held], "repair:release")
-        out += [
-            Ticket("held", tx_id=t.id, attempts=done.get(t.id, 0))
-            for t in held
-            if done.get(t.id, 0) < MAX_RELEASE_ATTEMPTS
-        ]
+        if held:
+            rel_repairs = await _repairs(s, [t.id for t in held], "repair:release_requeued")
+            for tx in held:
+                if rel_repairs.get(tx.id, 0) < MAX_RELEASE_ATTEMPTS:
+                    out.append(Ticket("held", tx_id=tx.id, attempts=rel_repairs.get(tx.id, 0)))
+
     return out

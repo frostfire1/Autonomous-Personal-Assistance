@@ -31,11 +31,16 @@ class Report:
     def text(self) -> str | None:
         if not self.done and not self.needs_you:
             return None
-        lines = ["🛠️ Perbaikan otomatis:"] + [f"• {d}" for d in self.done]
+        lines = []
+        if self.done:
+            lines += ["🛠️ Perbaikan otomatis:"] + [f"• {d}" for d in self.done]
         if self.needs_you:
-            lines += ["⚠️ Perlu dilihat (tidak bisa diperbaiki otomatis):"] + [
-                f"• {n}" for n in self.needs_you
-            ]
+            header = (
+                "⚠️ Perlu dilihat (tidak bisa diperbaiki otomatis):"
+                if self.done
+                else "⚠️ Perlu dilihat:"
+            )
+            lines += [header] + [f"• {n}" for n in self.needs_you]
         return "\n".join(lines)
 
 
@@ -82,13 +87,17 @@ async def run_steward(
         text = report.text()
         if text:
             needs_hash = None
-            if report.needs_you and not report.done and redis is not None:
+            if report.needs_you and redis is not None:
                 import hashlib
+
                 needs_hash = hashlib.sha256("\n".join(sorted(report.needs_you)).encode()).hexdigest()
                 last_hash = await redis.get("apa:steward:last_needs_hash")
+                if isinstance(last_hash, bytes):
+                    last_hash = last_hash.decode("utf-8", errors="replace")
                 if last_hash == needs_hash:
                     log.info("steward_suppressed_duplicate_needs_you", count=len(report.needs_you))
-                    text = None
+                    report.needs_you = []
+                    text = report.text()
             if text:
                 await record_reply(sm, notifier, text)
                 if needs_hash and redis is not None:
