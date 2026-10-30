@@ -1,9 +1,8 @@
-name: release-apk
+name: release
 
-# Builds the Android app and publishes it as a GitHub Release:
-#   - every push to main updates the "latest" release (apa-latest.apk), automatically, as a normal release;
-#   - pushing a tag such as v0.1.0 makes a permanent release (apa-v0.1.0.apk) with generated notes.
-# It is a debug build (signed with the debug key): fine for your own phone, not for the Play Store.
+# Builds the Android APK and Windows Desktop Tracker EXE and publishes both to GitHub Releases:
+#   - Every push to main updates the "latest" release with apa-latest.apk and APA-Tracker.exe;
+#   - Pushing a tag such as v0.1.0 creates a permanent release with versioned filenames and notes.
 on:
   push:
     branches: [main]
@@ -15,34 +14,114 @@ permissions:
 
 jobs:
   apk:
+    name: Build Android APK
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: "21"
+
       - uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: "9.3.0"
-      - name: Build
+
+      - name: Assemble Debug APK
         working-directory: android
         run: gradle :app:assembleDebug --no-daemon
-      - name: Name the file
+
+      - name: Stage APK
         run: |
-          if [[ "$GITHUB_REF" == refs/tags/* ]]; then NAME="apa-${GITHUB_REF_NAME}.apk"; else NAME="apa-latest.apk"; fi
-          cp android/app/build/outputs/apk/debug/app-debug.apk "$NAME"
-          echo "APK=$NAME" >> "$GITHUB_ENV"
-      - name: Publish a versioned release (tags)
+          cp android/app/build/outputs/apk/debug/app-debug.apk apa-latest.apk
+
+      - name: Upload APK Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: apk-artifact
+          path: apa-latest.apk
+          if-no-files-found: error
+
+  exe:
+    name: Build Windows Tracker EXE
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install PyInstaller and dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install pyinstaller pillow pystray
+
+      - name: Build Standalone Executable
+        run: python tools/build_exe.py
+
+      - name: Stage EXE
+        shell: bash
+        run: |
+          cp tools/dist/APA-Tracker.exe APA-Tracker.exe
+
+      - name: Upload EXE Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: exe-artifact
+          path: APA-Tracker.exe
+          if-no-files-found: error
+
+  publish:
+    name: Publish Release (APK + EXE)
+    needs: [apk, exe]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download APK artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: apk-artifact
+          path: ./artifacts/apk
+
+      - name: Download EXE artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: exe-artifact
+          path: ./artifacts/exe
+
+      - name: Prepare Release Assets
+        run: |
+          cp artifacts/apk/apa-latest.apk ./apa-latest.apk
+          cp artifacts/exe/APA-Tracker.exe ./APA-Tracker.exe
+          if [[ "$GITHUB_REF" == refs/tags/* ]]; then
+            cp apa-latest.apk "apa-${GITHUB_REF_NAME}.apk"
+            cp APA-Tracker.exe "APA-Tracker-${GITHUB_REF_NAME}.exe"
+            echo "RELEASE_FILES=apa-${GITHUB_REF_NAME}.apk APA-Tracker-${GITHUB_REF_NAME}.exe" >> "$GITHUB_ENV"
+          else
+            echo "RELEASE_FILES=apa-latest.apk APA-Tracker.exe" >> "$GITHUB_ENV"
+          fi
+
+      - name: Publish Versioned Release (Tags)
         if: startsWith(github.ref, 'refs/tags/')
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release create "$GITHUB_REF_NAME" "$APK" --title "APA $GITHUB_REF_NAME" --generate-notes
-      - name: Update the latest build (main)
+        run: |
+          gh release create "$GITHUB_REF_NAME" $RELEASE_FILES --title "APA $GITHUB_REF_NAME" --generate-notes
+
+      - name: Update Latest Build (Main)
         if: github.ref == 'refs/heads/main'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           gh release delete latest --yes --cleanup-tag || true
-          gh release create latest "$APK" --latest --target "$GITHUB_SHA" --title "Latest build (main)" \
-            --notes "Automatic debug build of the newest commit on main (${GITHUB_SHA::7}). Install with adb or open the file on the phone. See docs/ANDROID.md."
+          gh release create latest $RELEASE_FILES --latest --target "$GITHUB_SHA" --title "Latest build (main)" \
+            --notes "Automatic build of the newest commit on main (${GITHUB_SHA::7}).
+
+          ### Client Applications
+          - **Android Phone App:** \`apa-latest.apk\` (install with adb or open file on phone)
+          - **Windows Desktop Tracker:** \`APA-Tracker.exe\` (lives in system tray, auto-syncs screen time)
+
+          See [docs/ANDROID.md](https://github.com/frostfire1/Autonomous-Personal-Assistance/blob/main/docs/ANDROID.md) and [docs/ACTIVITYWATCH.md](https://github.com/frostfire1/Autonomous-Personal-Assistance/blob/main/docs/ACTIVITYWATCH.md)."

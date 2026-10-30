@@ -254,24 +254,52 @@ async def _execute(
     reply_to: int | None = None,
 ) -> tuple[str | None, str]:
     """(reply, role); reply None = hand the message to the payment extractor."""
+    _dup_words = re.compile(
+        r"\b(double|duplikat|dobel|sama|dua kali|2x|kok ada \d|ada \d.{0,15}(sama|ganda|terbaru)|kenapa ada \d|transaksi log kok ada \d)\b",
+        re.I,
+    )
+    _log_q = re.compile(r"\b(log\??|transaksi log|cek log|lihat log|riwayat)\b", re.I)
+    has_digits = bool(re.search(r"\d", text))
+
+    # 1. Global duplicate / double-entry complaint intercept
+    if _dup_words.search(text):
+        hint = (
+            "[The owner is reporting a possible duplicate transaction in the log. Look at RECENT TRANSACTIONS "
+            "in DATA, identify which look identical (same amount, same time window), and propose undo_transaction "
+            f"on the duplicate one. Do not add a new transaction.] {text}"
+        )
+        reply, _ = await plan_action(sm, llm, hint, history, tz, redis)
+        return reply, "action"
+
+    # 2. Inquiries about log history or transactions without an amount
+    if not has_digits and _log_q.search(text):
+        reply, _ = await converse(
+            sm, llm, redis, text, _history_block(history), tz, datetime.now(tz), reply_to=reply_to
+        )
+        return reply, "general"
+
+    # 3. Incomplete fragments or short conjunctions without transaction content
+    clean_strip = text.strip().lower()
+    if not has_digits and clean_strip in ("yang", "itu", "ini", "terus", "dan", "ok", "sip", "siap", "si"):
+        reply, _ = await converse(
+            sm, llm, redis, text, _history_block(history), tz, datetime.now(tz), reply_to=reply_to
+        )
+        return reply, "general"
+
     if p.intent == "transaction":
-        if not re.search(r"\d", text):  # no amount: this describes a payment already recorded, it is not a new one
-            # Duplicate / double-entry complaint: route to inspect + undo, not a new record
-            _dup_words = re.compile(r"\b(double|duplikat|dobel|sama|dua kali|2x|kok ada \d|ada \d.{0,10}(sama|ganda))\b", re.I)
-            if _dup_words.search(text):
-                hint = ("[The owner is reporting a possible duplicate transaction. Look at the last 5 committed transactions "
-                        "in DATA, identify which look identical (same amount, same time window), and propose undo_transaction "
-                        f"on the duplicate one. Do not add a new transaction.] {text}")
-                reply, _ = await plan_action(sm, llm, hint, history, tz, redis)
-                return reply, "action"
+        if not has_digits:  # no amount: this describes a payment already recorded, it is not a new one
             tx = await _described_transaction(sm, reply_to, sent_at)
             if tx is not None:
-                hint = (f"[The owner is describing transaction #{tx} (the one they replied to, or their latest). Propose "
-                        f"edit_transaction on #{tx} with the merchant, category or notes they describe; do not add a new "
-                        f"transaction.] {text}")
+                hint = (
+                    f"[The owner is describing transaction #{tx} (the one they replied to, or their latest). Propose "
+                    f"edit_transaction on #{tx} with the merchant, category or notes they describe; do not add a new "
+                    f"transaction.] {text}"
+                )
                 reply, _ = await plan_action(sm, llm, hint, history, tz, redis)
                 return reply, "action"
-            reply, _ = await converse(sm, llm, redis, text, _history_block(history), tz, datetime.now(tz), reply_to=reply_to)
+            reply, _ = await converse(
+                sm, llm, redis, text, _history_block(history), tz, datetime.now(tz), reply_to=reply_to
+            )
             return reply, "general"  # nothing recent to describe and no amount: ask what the owner means
         return None, "transaction"
     if p.intent == "batch":
@@ -309,6 +337,20 @@ async def _execute(
         reply, _ = await converse(sm, llm, redis, prompt_with_brief, _history_block(history), tz, datetime.now(tz), reply_to=reply_to)
         return reply, "A-00"
     if p.intent == "action":
+        if not has_digits:
+            tx = await _described_transaction(sm, reply_to, sent_at)
+            if tx is not None:
+                hint = (
+                    f"[The owner is describing transaction #{tx} (the one they replied to, or their latest). Propose "
+                    f"edit_transaction on #{tx} with the merchant, category or notes they describe; DO NOT add a new "
+                    f"transaction.] {text}"
+                )
+                reply, _ = await plan_action(sm, llm, hint, history, tz, redis)
+                return reply, "action"
+            reply, _ = await converse(
+                sm, llm, redis, text, _history_block(history), tz, datetime.now(tz), reply_to=reply_to
+            )
+            return reply, "general"
         reply, _ = await plan_action(sm, llm, text, history, tz, redis)
         return reply, "action"
     # everything else, a question, a greeting or "what can you do": the one assistant answers, with its look-ups, memory and skills

@@ -41,6 +41,8 @@ _RESUME = {
     ("telegram_shorthand", "extracting"): ("extract_event", "needs_llm"),
     ("telegram_statement", "received"): ("reconcile_event", None),
     ("telegram_statement", "reconciling"): ("reconcile_event", "received"),
+    ("telegram_file", "received"): ("file_event", None),
+    ("telegram_file", "processing"): ("file_event", "received"),
     ("android_listener", "received"): ("process_inbound_event", None),
     ("android_listener", "needs_llm"): ("extract_event", None),
     ("android_listener", "extracting"): ("extract_event", "needs_llm"),
@@ -92,17 +94,27 @@ async def fix_stuck(sm: async_sessionmaker, redis: Any, t: Ticket) -> Fix:
         ev = await _event(s, t.event_id)
         if ev is None or ev.status != t.status:  # it moved on by itself
             return Fix("stuck", True, "")
-        known = ("telegram_photo", "telegram_shorthand", "android_listener", "telegram_statement")
+        st = dict((ev.payload or {}).get("steward") or {})
+        if st.get("reported") and st.get("gave_up"):
+            return Fix("stuck", True, "")
+        known = ("telegram_photo", "telegram_shorthand", "android_listener", "telegram_statement", "telegram_file")
         family = ev.source if ev.source in known else None
         job, reset = _ANY.get((ev.status,)) or _RESUME.get((family, ev.status)) or (None, None)
-        if job is None:
-            return Fix("stuck", False, f"pesan #{ev.id} macet di status {ev.status}", unfixable=True)
+        if job is None or t.attempts >= 3:
+            st.update(gave_up=True, reported=True)
+            ev.payload = {**(ev.payload or {}), "steward": st}
+            ev.status = "failed"
+            ev.error = ev.error or f"stuck in {t.status}: unfixable"
+            await _audit(s, "stuck_gave_up", f"event {ev.id} stuck in {t.status}: marked failed")
+            await s.commit()
+            return Fix("stuck", False, f"pesan #{ev.id} macet di status {t.status}", unfixable=True)
         if reset:
             ev.status = reset
         ev.payload = _bump(ev.payload, "stuck")
         await _audit(s, "requeue", f"event {ev.id} stuck in {t.status} for 15+ minutes: re-enqueued {job}")
         await s.commit()
-    await redis.enqueue_job(job, t.event_id)
+    if redis is not None:
+        await redis.enqueue_job(job, t.event_id)
     return Fix("stuck", True, f"pesan #{t.event_id} yang macet diproses ulang")
 
 
@@ -133,8 +145,10 @@ async def fix_image(
             if t.reported
             else Fix("image", False, f"foto #{t.event_id}: {t.reason or 'tidak terbaca'}", unfixable=True)
         )
+    if t.reported:
+        return None
     if t.reason not in RETRYABLE_IMAGE:
-        return Fix("image", False, f"foto #{t.event_id}: {t.reason or 'tidak terbaca'}", unfixable=True)
+        return await _give_up(sm, t, t.reason or "tidak terbaca")
 
     if t.attempts == 0:
         async with sm() as s:
@@ -197,8 +211,10 @@ async def _give_up(sm: async_sessionmaker, t: Ticket, reason: str) -> Fix:
         ev = await _event(s, t.event_id)
         if ev is not None:
             st = dict((ev.payload or {}).get("steward") or {})
+            if st.get("reported") and st.get("gave_up"):
+                return Fix("image", True, "")
             st.update(gave_up=True, reported=True, reason=reason)
-            ev.payload = {**ev.payload, "steward": st}
+            ev.payload = {**(ev.payload or {}), "steward": st}
             await _audit(s, "image_gave_up", f"event {ev.id}: could not be repaired ({reason})")
             await s.commit()
     return Fix("image", False, f"foto #{t.event_id}: {reason}", unfixable=True)

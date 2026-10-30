@@ -39,7 +39,15 @@ def keyboard(rows: Buttons):
     from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 
     return InlineKeyboardMarkup(
-        inline_keyboard=[[InlineKeyboardButton(text=t, callback_data=d) for t, d in row] for row in rows]
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(text=t, url=d[4:])
+                if d.startswith("url:")
+                else InlineKeyboardButton(text=t, callback_data=d)
+                for t, d in row
+            ]
+            for row in rows
+        ]
     )
 
 
@@ -104,14 +112,16 @@ class TelegramNotifier:
     async def send(self, text: str) -> int | None:
         from apa import gif
 
-        text, animation = gif.split(text)  # a reply may end with [[gif:URL]]: sent as an animation with the words as its caption
+        text, animation = gif.split(text)
         rows = buttons_for(text)
         markup = keyboard(rows) if rows else None
         if animation:
             try:
-                message = await self._bot.send_animation(self._chat_id, animation, caption=text[:1000] or None, reply_markup=markup)
+                message = await self._bot.send_animation(
+                    self._chat_id, animation, caption=text[:1000] or None, reply_markup=markup
+                )
                 return message.message_id
-            except Exception as e:  # the link could not be fetched or shown: the words and the link still go out
+            except Exception as e:
                 log.warning("gif_send_failed", error=type(e).__name__)
                 text = f"{text}\n{animation}".strip()
         from apa.core.settings import get_settings
@@ -120,7 +130,6 @@ class TelegramNotifier:
         chunks = split_telegram_text(text, max_chars=4000) if split_enabled else [text]
         last_id = None
         for i, chunk in enumerate(chunks):
-            # Only attach inline buttons/keyboard to the final message chunk
             chunk_markup = markup if i == len(chunks) - 1 else None
             message = await self._bot.send_message(self._chat_id, chunk, reply_markup=chunk_markup)
             last_id = message.message_id

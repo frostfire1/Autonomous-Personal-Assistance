@@ -828,6 +828,22 @@ class LaptopTrackerApp:
                 dash_url = self.server
             webbrowser.open(dash_url)
 
+        def on_check_update(icon, item):
+            def _check():
+                try:
+                    url = "https://api.github.com/repos/frostfire1/Autonomous-Personal-Assistance/releases/latest"
+                    req = urllib.request.Request(url, headers={"User-Agent": "APA-Tracker"})
+                    with urllib.request.urlopen(req, timeout=5) as resp:
+                        data = json.loads(resp.read().decode("utf-8"))
+                        tag = data.get("tag_name", "latest")
+                        html_url = data.get("html_url", "https://github.com/frostfire1/Autonomous-Personal-Assistance/releases/latest")
+                        icon.notify(f"Latest release: {tag}", title="APA Tracker - Updates")
+                        webbrowser.open(html_url)
+                except Exception as e:
+                    logging.warning(f"Update check failed: {e}")
+                    webbrowser.open("https://github.com/frostfire1/Autonomous-Personal-Assistance/releases")
+            threading.Thread(target=_check, daemon=True).start()
+
         def on_view_logs(icon, item):
             if LOG_FILE.exists():
                 try:
@@ -858,6 +874,7 @@ class LaptopTrackerApp:
             pystray.MenuItem(get_pause_label, on_toggle_pause),
             pystray.Menu.SEPARATOR,
             pystray.MenuItem("🌐 Open Web Dashboard", on_open_web),
+            pystray.MenuItem("🚀 Check for Updates", on_check_update),
             pystray.MenuItem("📄 View Activity Logs", on_view_logs),
             pystray.Menu.SEPARATOR,
             pystray.MenuItem("❌ Exit", on_exit),

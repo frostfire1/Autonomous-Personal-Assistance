@@ -24,8 +24,8 @@ BACK: Buttons = [[("⬅️ Menu", "m:menu")]]
 MAIN: Buttons = [
     [("📊 Hari ini", "m:today"), ("🧾 Terakhir", "m:recent")],
     [("⏳ Ditahan", "m:held"), ("💰 Anggaran", "m:budget")],
-    [("🗂️ Riwayat", "m:log"), ("🔓 Cabut lockdown", "m:unlock")],
-    [("❓ Bantuan", "m:help")],
+    [("🗂️ Riwayat", "m:log"), ("📱 Unduh App", "m:download")],
+    [("🔓 Cabut lockdown", "m:unlock"), ("❓ Bantuan", "m:help")],
 ]
 
 # the command menu Telegram shows next to the text box (name, description)
@@ -37,6 +37,7 @@ BOT_COMMANDS = [
     ("anggaran", "Anggaran bulan ini"),
     ("bantuan", "Cara pakai"),
     ("log", "Riwayat pesan, jawaban dan alasannya"),
+    ("download", "Download Android APK & Windows Tracker EXE"),
     ("unlock", "Cabut lockdown"),
     ("private", "Sesi curhat privat (dihapus otomatis)"),
     ("selesai", "Akhiri sesi privat dan hapus pesannya"),
@@ -76,6 +77,12 @@ _ALIAS = {
     "help": "help",
     "log": "log",
     "riwayat": "log",
+    "download": "download",
+    "unduh": "download",
+    "app": "download",
+    "apk": "download",
+    "exe": "download",
+    "update": "download",
 }
 _SLASH = re.compile(r"^/(?P<name>[a-z_]+)(?:@\w+)?\s*$", re.I)
 _ACTION_CMD = re.compile(r"^/(?P<name>confirm|cancel)_(?P<nonce>[0-9a-f]{12})(?:@\w+)?\s*$", re.I)
@@ -205,6 +212,26 @@ async def log_view(sm: async_sessionmaker, tz: ZoneInfo, before_id: int | None =
     return View(render_timeline(rows, tz), buttons + BACK)
 
 
+def download_view() -> View:
+    text = (
+        "📱 Aplikasi Klien APA\n\n"
+        "• Android App (APK): Listener bank, Health Connect & briefing suara\n"
+        "• Windows Tracker (EXE): Monitor screen time & background usage di tray\n\n"
+        "Unduh langsung melalui tombol di bawah atau lewat GitHub Releases:"
+    )
+    repo = "frostfire1/Autonomous-Personal-Assistance"
+    apk_link = f"url:https://github.com/{repo}/releases/latest/download/apa-latest.apk"
+    exe_link = f"url:https://github.com/{repo}/releases/latest/download/APA-Tracker.exe"
+    rel_link = f"url:https://github.com/{repo}/releases"
+    rows: Buttons = [
+        [("🤖 Unduh Android APK", apk_link)],
+        [("💻 Unduh Windows Tracker EXE", exe_link)],
+        [("📦 GitHub Releases", rel_link)],
+        BACK[0],
+    ]
+    return View(text, rows)
+
+
 async def view_for(sm: async_sessionmaker, key: str, tz: ZoneInfo) -> View:
     if key == "today":
         return await today_view(sm, tz)
@@ -218,6 +245,8 @@ async def view_for(sm: async_sessionmaker, key: str, tz: ZoneInfo) -> View:
         return View(HELP, BACK)
     if key == "log":
         return await log_view(sm, tz)
+    if key == "download":
+        return download_view()
     return View("📋 Menu utama", MAIN)
 
 

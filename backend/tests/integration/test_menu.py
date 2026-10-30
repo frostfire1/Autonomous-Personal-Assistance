@@ -50,13 +50,14 @@ def labels(rows_):
 
 def test_every_main_menu_button_leads_somewhere_and_every_command_has_a_view():
     keys = {data.split(":")[1] for row in MAIN for _, data in row}
-    assert keys == {"today", "recent", "held", "budget", "unlock", "help", "log"}
+    assert keys == {"today", "recent", "held", "budget", "unlock", "help", "log", "download"}
     for name, _ in BOT_COMMANDS:
         assert menu_key(f"/{name}") or name in ("unlock", "private", "selesai")  # commands, not views
 
 
 @pytest.mark.parametrize("text,key", [("/start", "menu"), ("/menu@MyBot", "menu"), ("/hari_ini", "today"),
-                                      ("/Help", "help"), ("/undo_8f9a2b", None), ("kopi", None), ("/x", None)])
+                                      ("/Help", "help"), ("/download", "download"),
+                                      ("/undo_8f9a2b", None), ("kopi", None), ("/x", None)])
 def test_menu_key(text, key):
     assert menu_key(text) == key
 

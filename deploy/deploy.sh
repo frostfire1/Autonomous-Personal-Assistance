@@ -67,10 +67,14 @@ backend_env() {
   [ "$REDIS_MODE" = external ] && redis="$REDIS_URL"
   [ "$LITELLM_MODE" = external ] && llm="$LITELLM_BASE_URL"
   [ "$S3_MODE" = local ] && ev=local
+  local git_sha; git_sha="$(git rev-parse --short HEAD 2>/dev/null || echo '')"
   ENVARGS=(--env-file .env -e TZ="$TZV" -e DATABASE_URL="$APP_URL" -e REDIS_URL="$redis"
-    -e LITELLM_BASE_URL="$llm" -e LITELLM_MASTER_KEY="$key" -e EVIDENCE_BACKEND="$ev")
+    -e LITELLM_BASE_URL="$llm" -e LITELLM_MASTER_KEY="$key" -e EVIDENCE_BACKEND="$ev"
+    -e GIT_SHA="$git_sha" -e GITHUB_REPO="frostfire1/Autonomous-Personal-Assistance")
   # photos always have a place on this disk too: the store itself when S3_MODE=local, the fallback when the S3 store refuses one
   ENVARGS+=(-e EVIDENCE_DIR=/data/evidence -v apa-evidence:/data/evidence)
+  [ -d "$ROOT/tools/dist" ] && ENVARGS+=(-v "$ROOT/tools/dist:/app/tools/dist:ro")
+  [ -d "$ROOT/android/app/build/outputs/apk" ] && ENVARGS+=(-v "$ROOT/android/app/build/outputs/apk:/app/android/app/build/outputs/apk:ro")
   [ "${RESEARCH_MODE:-off}" = bundled ] && ENVARGS+=(-e RESEARCH_URL=http://gptr:8000)
   return 0
 }

@@ -97,6 +97,8 @@ async def find(sm: async_sessionmaker, now: datetime) -> list[Ticket]:
         )
         for e in stuck:
             st = _steward(e)
+            if st.get("reported") and st.get("gave_up"):
+                continue
             n = (st.get("attempts") or {}).get("stuck", 0)
             if n < MAX_STUCK_ATTEMPTS:
                 out.append(Ticket("stuck", event_id=e.id, source=e.source, status=e.status, attempts=n))
@@ -140,6 +142,8 @@ async def find(sm: async_sessionmaker, now: datetime) -> list[Ticket]:
         )
         for e in photos:
             st = _steward(e)
+            if st.get("reported") and st.get("gave_up"):
+                continue
             p = e.payload or {}
             out.append(
                 Ticket(

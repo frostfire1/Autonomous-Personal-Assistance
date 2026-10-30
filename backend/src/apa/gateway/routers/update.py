@@ -1,6 +1,10 @@
-"""Self-update: check GitHub for new commits and apply them by running deploy.sh.
-Same API key as /ingest. Only available when the project folder is a git repo and
-deploy/deploy.sh exists next to it — otherwise the endpoints return 409."""
+"""Self-update: check GitHub for new commits, serve client app downloads (APK & EXE),
+and apply updates by running deploy.sh when available.
+
+Uses GitHub repo https://github.com/frostfire1/Autonomous-Personal-Assistance.
+Endpoints for downloading client binaries (APK and EXE) redirect to GitHub Releases
+or serve locally built artifacts if present.
+"""
 
 from __future__ import annotations
 
@@ -8,13 +12,21 @@ import asyncio
 import os
 import subprocess
 from pathlib import Path
+from typing import Any
 
+import httpx
 from fastapi import APIRouter, Depends, HTTPException
-from fastapi.responses import StreamingResponse
+from fastapi.responses import FileResponse, RedirectResponse, Response, StreamingResponse
 
 from apa.gateway.routers.ingest import require_ingest_key
 
-router = APIRouter(prefix="/update", tags=["update"], dependencies=[Depends(require_ingest_key)])
+router = APIRouter(prefix="/update", tags=["update"])
+
+DEFAULT_REPO = "frostfire1/Autonomous-Personal-Assistance"
+
+
+def _repo() -> str:
+    return os.environ.get("GITHUB_REPO", DEFAULT_REPO).strip() or DEFAULT_REPO
 
 
 def _root() -> Path:
@@ -42,69 +54,230 @@ def _git(*args: str, cwd: Path) -> subprocess.CompletedProcess[str]:
     )
 
 
-def _require_git(root: Path) -> None:
-    if not (root / ".git").exists():
-        raise HTTPException(409, "Not a git repository — self-update is not available.")
+def _get_local_sha(root: Path) -> str:
+    """Resolve the currently deployed local commit SHA from env, file, or git."""
+    for env_var in ("GIT_SHA", "COMMIT_SHA", "APP_VERSION"):
+        val = os.environ.get(env_var)
+        if val and val.strip():
+            return val.strip()[:7]
 
+    for marker in (root / "GIT_SHA", root / ".git_sha", Path("/app/GIT_SHA")):
+        if marker.exists():
+            try:
+                txt = marker.read_text(encoding="utf-8").strip()
+                if txt:
+                    return txt[:7]
+            except Exception:
+                pass
 
-def _require_deploy(root: Path) -> None:
-    if not (root / "deploy" / "deploy.sh").exists():
-        raise HTTPException(409, "deploy/deploy.sh not found — self-update is not available.")
+    if (root / ".git").exists():
+        try:
+            res = _git("rev-parse", "--short", "HEAD", cwd=root)
+            if res.returncode == 0 and res.stdout.strip():
+                return res.stdout.strip()
+        except Exception:
+            pass
+
+    return "unknown"
 
 
 # ── GET /update/check ────────────────────────────────────────────────────────
 
-@router.get("/check")
-async def check_for_updates() -> dict:
-    """Fetch from origin and return how far behind HEAD is, plus the latest remote commit info."""
+@router.get("/check", dependencies=[Depends(require_ingest_key)])
+async def check_for_updates() -> dict[str, Any]:
+    """Check GitHub (https://github.com/frostfire1/Autonomous-Personal-Assistance) for new commits."""
     root = _root()
-    _require_git(root)
+    repo = _repo()
+    repo_url = f"https://github.com/{repo}"
+    releases_url = f"https://github.com/{repo}/releases/latest"
+    apk_url = f"https://github.com/{repo}/releases/latest/download/apa-latest.apk"
+    exe_url = f"https://github.com/{repo}/releases/latest/download/APA-Tracker.exe"
 
-    # fetch silently — don't pull, just update refs
-    _git("fetch", "--quiet", "origin", cwd=root)
+    local_sha = _get_local_sha(root)
 
-    # current HEAD
-    head = _git("rev-parse", "--short", "HEAD", cwd=root)
-    head_sha = head.stdout.strip()
-
-    # remote HEAD (origin/main or origin/master, whichever exists)
-    remote_branch = "origin/main"
-    check = _git("rev-parse", "--verify", "origin/main", cwd=root)
-    if check.returncode != 0:
-        remote_branch = "origin/master"
-
-    remote = _git("rev-parse", "--short", remote_branch, cwd=root)
-    remote_sha = remote.stdout.strip()
-
-    # how many commits ahead is remote?
-    log = _git("rev-list", "--count", f"HEAD..{remote_branch}", cwd=root)
-    behind = int(log.stdout.strip() or "0")
-
-    # latest commit on remote
-    fmt = _git(
-        "log", "-1", "--format=%H%n%s%n%aI%n%an", remote_branch, cwd=root
-    )
-    parts = fmt.stdout.strip().splitlines()
+    # 1. Fetch latest commit from GitHub API
+    remote_sha = "unknown"
     latest = {
-        "sha": parts[0] if len(parts) > 0 else remote_sha,
-        "message": parts[1] if len(parts) > 1 else "",
-        "date": parts[2] if len(parts) > 2 else "",
-        "author": parts[3] if len(parts) > 3 else "",
+        "sha": "",
+        "message": "",
+        "date": "",
+        "author": "",
     }
+    behind = 0
+    up_to_date = True
 
-    # remote URL (for the link)
-    remote_url = _git("remote", "get-url", "origin", cwd=root)
-    repo_url = remote_url.stdout.strip().rstrip(".git")
-    if repo_url.startswith("git@github.com:"):
-        repo_url = repo_url.replace("git@github.com:", "https://github.com/")
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.get(
+                f"https://api.github.com/repos/{repo}/commits/main",
+                headers={"User-Agent": "APA-Self-Update"},
+            )
+            if resp.status_code == 200:
+                data = resp.json()
+                remote_full = data.get("sha", "")
+                remote_sha = remote_full[:7]
+                commit_info = data.get("commit", {})
+                latest = {
+                    "sha": remote_full,
+                    "message": commit_info.get("message", "").split("\n")[0],
+                    "date": commit_info.get("committer", {}).get("date", ""),
+                    "author": commit_info.get("author", {}).get("name", ""),
+                }
+
+                if local_sha != "unknown":
+                    if local_sha.lower() == remote_sha.lower():
+                        up_to_date = True
+                        behind = 0
+                    else:
+                        # Compare commit distance via GitHub API
+                        comp_resp = await client.get(
+                            f"https://api.github.com/repos/{repo}/compare/{local_sha}...main",
+                            headers={"User-Agent": "APA-Self-Update"},
+                        )
+                        if comp_resp.status_code == 200:
+                            comp_data = comp_resp.json()
+                            behind = int(comp_data.get("ahead_by", 1))
+                            up_to_date = (behind == 0)
+                        else:
+                            behind = 1
+                            up_to_date = False
+                else:
+                    up_to_date = False
+                    behind = 1
+            else:
+                # GitHub API returned non-200 (e.g. rate limit) -> fallback to git if present
+                raise RuntimeError(f"GitHub API status {resp.status_code}")
+
+    except Exception:
+        # Fallback to local git if available
+        if (root / ".git").exists():
+            try:
+                _git("fetch", "--quiet", "origin", cwd=root)
+                head = _git("rev-parse", "--short", "HEAD", cwd=root)
+                local_sha = head.stdout.strip() or local_sha
+
+                remote_branch = "origin/main"
+                check = _git("rev-parse", "--verify", "origin/main", cwd=root)
+                if check.returncode != 0:
+                    remote_branch = "origin/master"
+
+                remote = _git("rev-parse", "--short", remote_branch, cwd=root)
+                remote_sha = remote.stdout.strip() or remote_sha
+
+                log = _git("rev-list", "--count", f"HEAD..{remote_branch}", cwd=root)
+                behind = int(log.stdout.strip() or "0")
+                up_to_date = (behind == 0)
+
+                fmt = _git("log", "-1", "--format=%H%n%s%n%aI%n%an", remote_branch, cwd=root)
+                parts = fmt.stdout.strip().splitlines()
+                latest = {
+                    "sha": parts[0] if len(parts) > 0 else remote_sha,
+                    "message": parts[1] if len(parts) > 1 else "",
+                    "date": parts[2] if len(parts) > 2 else "",
+                    "author": parts[3] if len(parts) > 3 else "",
+                }
+            except Exception:
+                pass
 
     return {
-        "up_to_date": behind == 0,
+        "up_to_date": up_to_date,
         "behind": behind,
-        "local_sha": head_sha,
+        "local_sha": local_sha,
         "remote_sha": remote_sha,
         "latest_commit": latest,
         "repo_url": repo_url,
+        "releases_url": releases_url,
+        "apk_url": apk_url,
+        "exe_url": exe_url,
+    }
+
+
+# ── GET /update/download/apk & exe ──────────────────────────────────────────
+
+def _find_local_apk(root: Path) -> Path | None:
+    candidates = [
+        root / "android" / "app" / "build" / "outputs" / "apk" / "debug" / "app-debug.apk",
+        root / "android" / "app" / "build" / "outputs" / "apk" / "release" / "app-release.apk",
+        root / "apa-latest.apk",
+        Path("/data/downloads/apa-latest.apk"),
+        Path("/data/apa-latest.apk"),
+    ]
+    for p in candidates:
+        if p.exists() and p.is_file():
+            return p
+    return None
+
+
+def _find_local_exe(root: Path) -> Path | None:
+    candidates = [
+        root / "tools" / "dist" / "APA-Tracker.exe",
+        root / "APA-Tracker.exe",
+        Path("/data/downloads/APA-Tracker.exe"),
+        Path("/data/APA-Tracker.exe"),
+    ]
+    for p in candidates:
+        if p.exists() and p.is_file():
+            return p
+    return None
+
+
+@router.get("/download/apk")
+async def download_apk() -> Response:
+    """Download the Android APK. Serves locally built debug APK or redirects to GitHub Releases."""
+    root = _root()
+    local_apk = _find_local_apk(root)
+    if local_apk is not None:
+        return FileResponse(
+            str(local_apk),
+            media_type="application/vnd.android.package-archive",
+            filename="apa-latest.apk",
+        )
+    repo = _repo()
+    return RedirectResponse(
+        f"https://github.com/{repo}/releases/latest/download/apa-latest.apk",
+        status_code=307,
+    )
+
+
+@router.get("/download/exe")
+async def download_exe() -> Response:
+    """Download the Windows Desktop Tracker. Serves locally built EXE or redirects to GitHub Releases."""
+    root = _root()
+    local_exe = _find_local_exe(root)
+    if local_exe is not None:
+        return FileResponse(
+            str(local_exe),
+            media_type="application/octet-stream",
+            filename="APA-Tracker.exe",
+        )
+    repo = _repo()
+    return RedirectResponse(
+        f"https://github.com/{repo}/releases/latest/download/APA-Tracker.exe",
+        status_code=307,
+    )
+
+
+@router.get("/downloads")
+async def client_downloads() -> dict[str, Any]:
+    """Get metadata and download URLs for both Android APK and Windows Tracker EXE."""
+    root = _root()
+    repo = _repo()
+    return {
+        "apk": {
+            "name": "APA Android App",
+            "filename": "apa-latest.apk",
+            "url": f"https://github.com/{repo}/releases/latest/download/apa-latest.apk",
+            "has_local": _find_local_apk(root) is not None,
+            "docs": f"https://github.com/{repo}/blob/main/docs/ANDROID.md",
+        },
+        "exe": {
+            "name": "APA Windows Desktop Tracker",
+            "filename": "APA-Tracker.exe",
+            "url": f"https://github.com/{repo}/releases/latest/download/APA-Tracker.exe",
+            "has_local": _find_local_exe(root) is not None,
+            "docs": f"https://github.com/{repo}/blob/main/docs/ACTIVITYWATCH.md",
+        },
+        "releases_url": f"https://github.com/{repo}/releases/latest",
     }
 
 
@@ -113,9 +286,19 @@ async def check_for_updates() -> dict:
 async def _stream_update(root: Path, target: str):
     """Async generator: git pull then deploy.sh <target>, yielding each output line."""
     deploy = root / "deploy" / "deploy.sh"
+    repo = _repo()
+
+    if not (root / ".git").exists() or not deploy.exists():
+        yield "data: [info] Server is running in container mode (no host git repository mounted).\n\n"
+        yield f"data: [info] Official repository: https://github.com/{repo}\n\n"
+        yield "data: [deploy] To apply update on your host machine, run:\n\n"
+        yield f"data: [deploy]   cd <project_dir> && git pull --rebase && bash deploy/deploy.sh {target}\n\n"
+        yield "data: [info] Client apps (APK and EXE) can be downloaded from Releases.\n\n"
+        yield "data: [done] 0\n\n"
+        return
 
     # Step 1 – git pull
-    yield "data: [git] Pulling latest commits…\n\n"
+    yield "data: [git] Pulling latest commits from GitHub…\n\n"
     proc = await asyncio.create_subprocess_exec(
         "git", "pull", "--rebase",
         cwd=root,
@@ -155,13 +338,10 @@ async def _stream_update(root: Path, target: str):
         yield "data: [done] 1\n\n"
 
 
-@router.post("/apply")
+@router.post("/apply", dependencies=[Depends(require_ingest_key)])
 async def apply_update(target: str = "up") -> StreamingResponse:
-    """Pull and redeploy.  target='up' rebuilds everything; target='web' rebuilds only the dashboard.
-    Returns a text/event-stream of log lines; the final line is 'data: [done] <exit_code>'."""
+    """Pull and redeploy. target='up' rebuilds everything; target='web' rebuilds only the dashboard."""
     root = _root()
-    _require_git(root)
-    _require_deploy(root)
     if target not in ("up", "web"):
         raise HTTPException(422, "target must be 'up' or 'web'")
 

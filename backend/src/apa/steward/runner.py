@@ -81,7 +81,18 @@ async def run_steward(
             (report.needs_you if fix.unfixable else report.done).append(fix.line)
         text = report.text()
         if text:
-            await record_reply(sm, notifier, text)
+            needs_hash = None
+            if report.needs_you and not report.done and redis is not None:
+                import hashlib
+                needs_hash = hashlib.sha256("\n".join(sorted(report.needs_you)).encode()).hexdigest()
+                last_hash = await redis.get("apa:steward:last_needs_hash")
+                if last_hash == needs_hash:
+                    log.info("steward_suppressed_duplicate_needs_you", count=len(report.needs_you))
+                    text = None
+            if text:
+                await record_reply(sm, notifier, text)
+                if needs_hash and redis is not None:
+                    await redis.set("apa:steward:last_needs_hash", needs_hash, ex=43200)
         log.info(
             "steward_ran", scanned=report.scanned, done=len(report.done), needs_you=len(report.needs_you)
         )

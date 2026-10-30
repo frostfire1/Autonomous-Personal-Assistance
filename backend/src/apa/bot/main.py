@@ -132,6 +132,32 @@ async def command(message: Message, arq: ArqRedis, private: PrivateManager) -> N
     if word in ("/diary", "/jurnal"):
         await _quietly(_diary(message))  # a failure must not reach aiogram's error log: it would print the diary text
         return
+    if word in ("/apk", "/unduh_apk"):
+        from aiogram.types import FSInputFile
+
+        from apa.gateway.routers.update import _find_local_apk, _root
+
+        local_apk = _find_local_apk(_root())
+        if local_apk is not None and local_apk.exists():
+            await message.answer_document(
+                FSInputFile(str(local_apk), filename="apa-latest.apk"),
+                caption="📱 Android APK (apa-latest.apk)\n\n"
+                "GitHub: https://github.com/frostfire1/Autonomous-Personal-Assistance/releases/latest",
+            )
+            return
+    if word in ("/exe", "/tracker", "/unduh_exe"):
+        from aiogram.types import FSInputFile
+
+        from apa.gateway.routers.update import _find_local_exe, _root
+
+        local_exe = _find_local_exe(_root())
+        if local_exe is not None and local_exe.exists():
+            await message.answer_document(
+                FSInputFile(str(local_exe), filename="APA-Tracker.exe"),
+                caption="💻 Windows Desktop Tracker (APA-Tracker.exe)\n\n"
+                "GitHub: https://github.com/frostfire1/Autonomous-Personal-Assistance/releases/latest",
+            )
+            return
     key = menu_key(message.text)
     if key is not None:  # /start /menu /hari_ini ...: an interactive view
         v = await view_for(SessionLocal, key, _tz())
