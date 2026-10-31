@@ -39,3 +39,10 @@ web/node_modules/
 web/tsconfig.tsbuildinfo
 *.bak
 .DS_Store
+
+# client configs and watcher runtime logs
+tools/dist/*.log
+tools/dist/*.json
+!tools/dist/laptop_config.example.json
+tools/build/
+*.log

@@ -71,7 +71,11 @@ async def undo_transaction(
         tx.status, tx.rolled_back_at, tx.rolled_back_via = "rolled_back", now, via
         await s.flush()
         await apply_effects(s, tx, sign=-1, tz=tz, now=now)
-        if tx_kind(tx.direction, tx.execution_mode) == "expense" and tx.merchant:
+        if (
+            tx_kind(tx.direction, tx.execution_mode) == "expense"
+            and tx.merchant
+            and tx.execution_mode != "reconciliation_catchup"
+        ):
             await remove_visit(s, tx.merchant, tx.net_user_expense)
         await s.execute(  # money the user fronted for others is no longer owed
             update(TransactionSplit)

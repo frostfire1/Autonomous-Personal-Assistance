@@ -15,6 +15,8 @@ from apa.ingestion.bank_parser import classify_skip, parse_amount, parse_notific
         ("1.250.000,50", "Rp", "1250000.50"),
         ("18000", "Rp", "18000"),
         ("18,000.00", "IDR", "18000.00"),
+        ("25,000.00", "Rp", "25000.00"),
+        ("18.000,00", "IDR", "18000.00"),
         ("0", "Rp", None),
     ],
 )
@@ -372,3 +374,8 @@ def test_the_merchant_is_never_the_banks_help_line_or_a_number():
     assert got is not None and got.merchant == "GoPay" and got.direction == "in"
     got = parse_notification("com.bca", "Pembayaran QRIS Rp18.000 ke KOPI KENANGAN berhasil. Butuh bantuan? Hubungi Halo BCA di 1500888.")
     assert got is not None and got.merchant == "KOPI KENANGAN"
+
+
+def test_currency_mark_inside_word_not_matched():
+    p = parse_notification("com.bca", "Pembayaran di SHARP 2000 Rp 150.000 berhasil")
+    assert p and p.amount == Decimal("150000") and p.merchant == "SHARP 2000"

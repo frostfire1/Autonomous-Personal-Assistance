@@ -20,7 +20,6 @@ from apa.core.logging import configure_logging, get_logger
 from apa.core.redis import arq_redis_settings
 from apa.core.settings import get_settings
 from apa.db.models.ops import InboundEvent
-from apa.health import huawei
 from apa.health import jobs as health_jobs
 from apa.ingestion import templates
 from apa.ingestion.bank_parser import (
@@ -327,24 +326,6 @@ async def briefing_telegram(ctx: dict) -> int:
     for i, text in enumerate(await daily_telegram(sm, ctx.get("redis"), tz, now, llm=ctx.get("llm")), start=1):
         sent += bool(await digest.deliver(sm, ctx["notifier"], None, f"briefing-manual:{now:%Y%m%d%H%M%S}:{i}", text))
     return sent
-
-
-async def huawei_healthkit_sync(ctx: dict) -> None:
-    """Huawei Health Kit cloud sync. Idle until HUAWEI_CLIENT_ID/SECRET and SECRETS_KEY are set and the owner
-    has authorised once; a failure is reported at most once a day."""
-    if not huawei.configured():
-        return
-    sm = ctx.get("sessionmaker", SessionLocal)
-    try:
-        async with httpx.AsyncClient(timeout=20) as http:
-            added = await huawei.sync(sm, http, datetime.now(UTC))
-        log.info("huawei_synced", **added)
-    except huawei.HuaweiError as e:
-        log.warning("huawei_sync_failed", error=str(e))
-        now = datetime.now(UTC)
-        await digest.deliver(sm, ctx["notifier"], ctx.get("redis"), f"huawei:{now:%Y-%m-%d}",
-                             f"⚠️ Sinkron Huawei Health Kit gagal: {e}")
-
 
 async def health_tick(ctx: dict) -> None:
     """A-03: keep today's intake estimate current, warn at 80% of a limit, notice a bad night, run the stress
@@ -721,7 +702,6 @@ class WorkerSettings:
         cron(cyberramen_poll, minute={0, 10, 20, 30, 40, 50}),
         cron(news_ingest, minute={0, 15, 30, 45}),
         cron(briefing_precompute, hour=_PRE_H, minute=_PRE_M),
-        cron(huawei_healthkit_sync, minute={0, 30}),
         cron(health_tick, minute={7, 22, 37, 52}),
         cron(price_tick, hour=8, minute=0),
         cron(weekly_digest, weekday="sun", hour=20, minute=0),

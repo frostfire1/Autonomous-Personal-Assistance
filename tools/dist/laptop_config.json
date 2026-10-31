@@ -1,9 +1,0 @@
-{
-  "server": "http://192.168.2.191:8000",
-  "key": "483cSAA0buZhtsTFoi7NMW7gMWpyfqz",
-  "hmac": "",
-  "device": "Tribe-Acer-Windows",
-  "kind": "desktop",
-  "push_interval": 300,
-  "startup": true
-}

@@ -45,8 +45,6 @@ class Settings(BaseSettings):
     secrets_key: str = ""
     nvd_api_key: str = ""  # optional: lifts NVD's rate limit (free key from nvd.nist.gov)
     price_feed_url: str = ""  # optional JSON feed of staple prices: [{"code","region","date","price"}]
-    huawei_client_id: str = ""
-    huawei_client_secret: str = ""
     # YouTube Data API (liked videos, follows): a Google Cloud OAuth client for TVs and Limited Input devices
     youtube_client_id: str = ""
     youtube_client_secret: str = ""

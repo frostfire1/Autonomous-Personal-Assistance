@@ -446,7 +446,7 @@ async def _edit_one(sm, a: EditTransaction, tx_id: int, tz: ZoneInfo) -> str:
             if expense and tx.merchant:  # the owner's correction becomes what the fast path will use
                 await set_default_category(s, tx.merchant, new_cat, now)
         if a.merchant is not None and a.merchant != old_merchant:
-            if expense and old_merchant:
+            if expense and old_merchant and tx.execution_mode != "reconciliation_catchup":
                 await remove_visit(s, old_merchant, tx.net_user_expense)
             if expense:
                 await record_visit(

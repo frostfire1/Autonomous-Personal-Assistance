@@ -16,6 +16,8 @@ D = Decimal
         ("out", "consensus_auto", "expense"),
         ("in", "deterministic_transfer", "income"),
         ("out", "deterministic_transfer", "withdrawal"),
+        ("in", "reconciliation_catchup", "income"),
+        ("out", "reconciliation_catchup", "expense"),
     ],
 )
 def test_tx_kind_from_stored_columns(direction, mode, kind):

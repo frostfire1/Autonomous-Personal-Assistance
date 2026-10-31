@@ -99,7 +99,7 @@ Tested: the whole backend with unit tests and, against a real Postgres and Redis
 text extraction, the debate and the vision reading live against real providers; the briefing in English and Japanese,
 topics, feeds and other countries live on a running server; the Android app builds, passes its unit tests and runs on a
 phone. Not tested: banks or currencies other than Indonesian rupiah beyond unit tests (the receipt-photo path still assumes whole
-numbers), Huawei Health Kit against the real service, `setup.sh` on a clean machine and its Docker or Podman
+numbers), `setup.sh` on a clean machine and its Docker or Podman
 install step, the optional S3 providers other than Garage, and the GitHub Actions workflow. Real receipt photos have only
 been run through synthetic fixtures. Treat anything under "Not tested" as needing a first-run check.
 

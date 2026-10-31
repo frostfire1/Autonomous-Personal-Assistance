@@ -23,9 +23,11 @@ def month_start(ts: datetime, tz: ZoneInfo) -> date:
 def tx_kind(direction: str, execution_mode: str) -> str:
     """Recover 'expense' | 'income' | 'withdrawal' from a stored row. Only meaningful for
     committed rows: quarantined ones were never applied."""
-    if execution_mode != "deterministic_transfer":
-        return "expense"
-    return "income" if direction == "in" else "withdrawal"
+    if direction == "in":
+        return "income"
+    if execution_mode == "deterministic_transfer":
+        return "withdrawal"
+    return "expense"
 
 
 def cash_delta(kind: str, wallet: str, total: Decimal, net: Decimal) -> Decimal:

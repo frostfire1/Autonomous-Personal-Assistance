@@ -5,7 +5,6 @@ from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from zoneinfo import ZoneInfo
 
-import httpx
 import pytest
 from cryptography.fernet import Fernet
 from httpx import ASGITransport, AsyncClient
@@ -25,9 +24,8 @@ from apa.db.models.health import (
     StressReading,
 )
 from apa.db.models.ledger import Transaction, TransactionItem
-from apa.db.models.ops import OAuthToken, TelegramMessage
+from apa.db.models.ops import TelegramMessage
 from apa.gateway.routers import health as health_router
-from apa.health import huawei
 from apa.health.ingest import HealthIn, MetricIn, SleepIn, StressIn, ingest, stress_grade
 from apa.health.jobs import (
     check_intake,
@@ -289,28 +287,14 @@ async def test_the_health_snapshot_reports_sleep_intake_and_steps_or_says_there_
     assert (await today_intake_tuple(stack, TZ, NOW))[0] == Decimal(95)
 
 
-# ---- Huawei Health Kit ---------------------------------------------------------------------------------------------------
+# ---- Secrets Encryption --------------------------------------------------------------------------------------------------
 
 
 @pytest.fixture
-def huawei_env(monkeypatch):
-    monkeypatch.setenv("HUAWEI_CLIENT_ID", "cid")
-    monkeypatch.setenv("HUAWEI_CLIENT_SECRET", "csecret")
+def secrets_env(monkeypatch):
     monkeypatch.setenv("SECRETS_KEY", Fernet.generate_key().decode())
     get_settings.cache_clear()
     yield
-    get_settings.cache_clear()
-
-
-def test_huawei_is_off_until_credentials_and_a_secrets_key_exist(monkeypatch):
-    for k in ("HUAWEI_CLIENT_ID", "HUAWEI_CLIENT_SECRET", "SECRETS_KEY"):
-        monkeypatch.delenv(k, raising=False)
-    get_settings.cache_clear()
-    assert huawei.configured() is False
-    monkeypatch.setenv("HUAWEI_CLIENT_ID", "x")
-    monkeypatch.setenv("HUAWEI_CLIENT_SECRET", "y")
-    get_settings.cache_clear()
-    assert huawei.configured() is False  # no key to encrypt tokens with: still off
     get_settings.cache_clear()
 
 
@@ -326,91 +310,13 @@ def test_secrets_refuse_to_store_anything_without_a_valid_key(monkeypatch):
     get_settings.cache_clear()
 
 
-def test_secrets_round_trip_and_a_wrong_key_cannot_read(huawei_env, monkeypatch):
+def test_secrets_round_trip_and_a_wrong_key_cannot_read(secrets_env, monkeypatch):
     token = secrets.encrypt("sekret")
     assert token != "sekret" and secrets.decrypt(token) == "sekret"
     monkeypatch.setenv("SECRETS_KEY", Fernet.generate_key().decode())
     get_settings.cache_clear()
     with pytest.raises(secrets.SecretsUnavailable):
         secrets.decrypt(token)
-
-
-def scripted(handler):
-    return httpx.AsyncClient(transport=httpx.MockTransport(handler))
-
-
-@infra
-async def test_tokens_are_stored_encrypted_and_a_fresh_one_is_used_without_refreshing(stack, huawei_env):
-    await huawei.save_tokens(stack, "ACCESS", "REFRESH", 3600, "scope")
-    (row,) = await rows(stack, OAuthToken)
-    assert "ACCESS" not in row.access_token_enc and "REFRESH" not in row.refresh_token_enc  # never in the clear
-    calls = []
-    async with scripted(lambda r: calls.append(r) or httpx.Response(500)) as http:
-        assert await huawei.access_token(stack, http) == "ACCESS"
-    assert calls == []
-
-
-@infra
-async def test_an_expiring_token_is_refreshed_and_the_new_pair_stored(stack, huawei_env):
-    await huawei.save_tokens(stack, "OLD", "REFRESH", 60, None)  # inside the 5-minute margin
-
-    def handler(req):
-        body = req.content.decode()
-        assert "grant_type=refresh_token" in body and "refresh_token=REFRESH" in body and "client_id=cid" in body
-        return httpx.Response(200, json={"access_token": "NEW", "refresh_token": "REFRESH2", "expires_in": 3600})
-
-    async with scripted(handler) as http:
-        assert await huawei.access_token(stack, http) == "NEW"
-    async with scripted(lambda r: httpx.Response(500)) as http:
-        assert await huawei.access_token(stack, http) == "NEW"  # and now it is the stored one
-    (row,) = await rows(stack, OAuthToken)
-    assert secrets.decrypt(row.refresh_token_enc) == "REFRESH2"
-
-
-@infra
-async def test_not_authorised_or_a_refused_refresh_is_a_clear_error(stack, huawei_env):
-    async with scripted(lambda r: httpx.Response(200)) as http:
-        with pytest.raises(huawei.HuaweiError, match="not authorised"):
-            await huawei.access_token(stack, http)
-    await huawei.save_tokens(stack, "OLD", "REFRESH", 1, None)
-    async with scripted(lambda r: httpx.Response(401)) as http:
-        with pytest.raises(huawei.HuaweiError, match="refresh http 401"):
-            await huawei.access_token(stack, http)
-
-
-SAMPLES = {"group": [{"startTime": 1_761_264_000_000, "sampleSet": [{"samplePoints": [
-    {"dataTypeName": huawei.STEPS, "value": [{"integerValue": 8123}]},
-    {"dataTypeName": huawei.CALORIES, "value": [{"floatValue": 410.5}]},
-    {"dataTypeName": huawei.DISTANCE, "value": [{"floatValue": 6100.0}]}, {"dataTypeName": "unknown", "value": []}]}]},
-    {"startTime": None}, "junk"]}
-
-
-def test_the_sample_parser_is_tolerant_of_missing_and_unknown_pieces():
-    h = huawei.to_health(SAMPLES)
-    (m,) = h.metrics
-    assert (m.step_count, m.active_calories, m.daily_distance_m) == (8123, 410, Decimal("6100.0"))
-    assert huawei.to_health({}).metrics == [] and huawei.to_health({"group": [{"startTime": 5}]}).metrics == []
-
-
-@infra
-async def test_a_sync_pulls_samples_and_stores_them_once(stack, huawei_env):
-    await huawei.save_tokens(stack, "ACCESS", "REFRESH", 3600, None)
-    seen = []
-
-    def handler(req):
-        seen.append((str(req.url), req.headers["authorization"]))
-        return httpx.Response(200, json=SAMPLES)
-
-    async with scripted(handler) as http:
-        first = await huawei.sync(stack, http, NOW)
-        second = await huawei.sync(stack, http, NOW)
-    assert first["metrics"] == 1 and second["metrics"] == 0
-    assert seen[0] == ("https://health-api.cloud.huawei.com/healthkit/v1/sampleSet:polymerize", "Bearer ACCESS")
-    (m,) = await rows(stack, HuaweiHealthMetric)
-    assert (m.sync_source, m.step_count) == ("cloud_api", 8123)
-    async with scripted(lambda r: httpx.Response(403)) as http:
-        with pytest.raises(huawei.HuaweiError, match="sampleSet http 403"):
-            await huawei.sync(stack, http, NOW)
 
 
 # ---- the API -------------------------------------------------------------------------------------------------------------

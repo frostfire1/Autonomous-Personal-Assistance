@@ -51,7 +51,7 @@ class _AmountPattern:
         code = currency.active()
         if code not in self._cache:
             num = r"(?P<num>\d{1,3}(?:[.,]\d{3})+(?:[.,]\d{1,2})?|\d+(?:[.,]\d{1,2})?)"
-            self._cache[code] = re.compile(rf"(?P<cur>{currency.marks_regex(code)})\s?{num}", re.I)
+            self._cache[code] = re.compile(rf"(?<![A-Za-z])(?P<cur>{currency.marks_regex(code)})\s?{num}", re.I)
         return self._cache[code]
 
     def search(self, text: str) -> re.Match | None:
@@ -122,14 +122,21 @@ class ParsedNotification:
 
 
 def parse_amount(raw: str, currency: str = "Rp") -> Decimal | None:
-    """Indonesian format uses '.' for thousands and ',' for decimals; IDR-prefixed text is English."""
-    english = currency.upper() == "IDR"
+    """Indonesian format uses '.' for thousands and ',' for decimals; IDR-prefixed text is English.
+    When both separators appear, the later one is the decimal point, whatever the prefix."""
     s = raw.strip()
-    thousands, decimal = (",", ".") if english else (".", ",")
-    # A lone separator followed by exactly 3 digits is a thousands separator, not a decimal.
-    if s.count(decimal) == 1 and thousands not in s and len(s.split(decimal)[1]) == 3:
-        s = s.replace(decimal, "")
-    s = s.replace(thousands, "").replace(decimal, ".")
+    last_dot, last_comma = s.rfind("."), s.rfind(",")
+    if last_dot >= 0 and last_comma >= 0:
+        dec = "." if last_dot > last_comma else ","
+        tho = "," if dec == "." else "."
+        s = s.replace(tho, "").replace(dec, ".")
+    else:
+        english = currency.upper() == "IDR"
+        thousands, decimal = (",", ".") if english else (".", ",")
+        # A lone separator followed by exactly 3 digits is a thousands separator, not a decimal.
+        if s.count(decimal) == 1 and thousands not in s and len(s.split(decimal)[1]) == 3:
+            s = s.replace(decimal, "")
+        s = s.replace(thousands, "").replace(decimal, ".")
     try:
         value = Decimal(s)
     except InvalidOperation:

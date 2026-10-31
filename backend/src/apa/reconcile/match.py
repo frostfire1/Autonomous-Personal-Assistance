@@ -115,7 +115,7 @@ def plan(lines: list[Line], ledger: list[Entry], *, allow_inject: bool = False) 
     still: list[Line] = []
     for line in rest:
         done = False
-        if not is_fee_line(line):
+        if line.direction == "debit" and not is_fee_line(line):
             for fee in KNOWN_FEES:
                 if line.amount > fee and (hit := _pick(line, ledger, taken, line.amount - fee)):
                     taken.add(hit[0].id)

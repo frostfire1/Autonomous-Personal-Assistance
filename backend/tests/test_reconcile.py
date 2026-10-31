@@ -295,3 +295,8 @@ def test_catat_semua_is_the_only_way_to_lift_the_safety_stop(c, yes):
                                        ("QRIS WARUNG BU SITI", "WARUNG BU SITI"), ("12345", "Mutasi bank")])
 def test_a_counterparty_name_is_read_out_of_bank_noise(raw, clean):
     assert clean_name(raw) == clean
+
+
+def test_a_credit_line_never_folds_a_fee():
+    p = plan([line(10, 52500, "TRF DARI BUDI", direction="credit")], [entry(1, 10, 50000, direction="in")])
+    assert not p.matched and len(p.catchup) == 1
