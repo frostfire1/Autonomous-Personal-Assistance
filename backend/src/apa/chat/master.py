@@ -11,7 +11,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from apa.agents.personas import ROUTINE
-from apa.chat.agent import CAPABILITIES, GROUNDED, NOT_BUILT, ROLE_HINT, _history_block
+from apa.chat.agent import GROUNDED, NOT_BUILT, ROLE_HINT, _history_block
 from apa.core.logging import get_logger
 
 log = get_logger(__name__)
@@ -97,8 +97,3 @@ async def plan(
     tokens = (res.prompt_tokens or 0) + (res.completion_tokens or 0)
     log.info("master_planned", intent=p.intent, agents=p.agents, tokens=tokens)
     return Plan(p.intent, p.agents, p.reply, p.topic, tokens)
-
-
-def unavailable_text(topic: str) -> str:
-    what = f" ({topic})" if topic else ""
-    return f"Maaf, topik itu{what} belum tersedia di saya. {CAPABILITIES}"

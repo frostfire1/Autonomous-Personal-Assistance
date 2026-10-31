@@ -589,6 +589,3 @@ async def resolve(
     log.info("action_confirmed", tool=d["tool"])
     return await _EXEC[d["tool"]](sm, redis, a, nonce, tz)
 
-
-def new_nonce() -> str:  # exposed for tests
-    return uuid.uuid4().hex[:_NONCE_LEN]

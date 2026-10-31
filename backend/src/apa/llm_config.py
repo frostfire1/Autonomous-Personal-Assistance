@@ -209,16 +209,6 @@ def public(cfg: LLMConfig) -> dict:
     for p in d["providers"].values():
         p["api_key_hint"] = masked(p.pop("api_key"))
     return d
-
-
-def merge_keys(new: LLMConfig, old: LLMConfig, sent_blank: set[str]) -> LLMConfig:
-    """A provider saved without a key keeps the key it had, so the dashboard never needs to hold or resend it."""
-    for name, p in new.providers.items():
-        if not p.api_key and name in old.providers and name not in sent_blank:
-            p.api_key = old.providers[name].api_key
-    return new
-
-
 _cache: tuple[float, LLMConfig] | None = None
 
 
@@ -262,8 +252,3 @@ async def current(sm: async_sessionmaker = SessionLocal) -> LLMConfig:
 def last() -> LLMConfig:
     """The most recently loaded settings without waiting (synchronous callers); defaults before the first load."""
     return _cache[1] if _cache else LLMConfig()
-
-
-def reset_cache() -> None:
-    global _cache
-    _cache = None

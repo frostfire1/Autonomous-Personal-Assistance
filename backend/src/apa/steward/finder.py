@@ -21,7 +21,6 @@ IMAGE_WAIT = timedelta(minutes=2)  # let the normal retries finish first
 IMAGE_WINDOW = timedelta(days=3)
 HELD_WAIT = timedelta(minutes=10)
 MAX_STUCK_ATTEMPTS = 3
-MAX_IMAGE_ATTEMPTS = 2
 MAX_RELEASE_ATTEMPTS = 3
 MAX_CATEGORY_ATTEMPTS = 1
 PER_KIND = 25

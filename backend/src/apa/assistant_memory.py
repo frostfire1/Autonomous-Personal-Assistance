@@ -44,7 +44,6 @@ SEARCH_ROWS = 1500  # rows decrypted for one search: plenty for one person's mem
 MIN_OWNER_MESSAGES = 2  # a day with one line is not worth a diary entry
 KINDS = ("person", "preference", "goal", "routine", "plan", "health", "other")
 OBS = "obs"  # a structured observation of the day (meal, mood, like...): data for the profile, never shown as text or searched
-OBS_TYPES = ("meal", "drink", "mood", "activity", "like", "dislike", "health", "place", "person", "other")
 MAX_OBS_PER_DAY = 12
 DAY = "day"  # the snapshot of one day: what the owner was like (see apa.daily)
 WATCH = "watch"  # what the owner watched or searched on YouTube (their Takeout export), one row per item

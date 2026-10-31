@@ -72,7 +72,6 @@ GEMINI_URL = "https://generativelanguage.googleapis.com/v1beta/models/{model}:ge
 GEMINI_STYLE_EN = (
     "Read this in English in a cheerful, warm, energetic morning-host voice, with lively intonation and a natural pace:"
 )
-EDGE_EN_DEFAULT = "en-US-AvaMultilingualNeural"
 
 
 def _style(lang: str) -> str:

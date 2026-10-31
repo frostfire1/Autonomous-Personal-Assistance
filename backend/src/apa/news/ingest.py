@@ -22,7 +22,6 @@ log = get_logger(__name__)
 
 HEARTBEAT_KEY = "apa:news:src:"
 QUIET_AFTER_FAILURES = 6  # consecutive failures before the owner hears about a source
-RETENTION = timedelta(days=14)
 
 
 def dedup_hash(title: str, url: str) -> str:

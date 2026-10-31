@@ -64,11 +64,10 @@ except ImportError:
 
 try:
     import tkinter as tk
-    from tkinter import messagebox, ttk
+    from tkinter import messagebox
     TK_AVAILABLE = True
 except ImportError:
     tk = None
-    ttk = None
     messagebox = None
     TK_AVAILABLE = False
 
@@ -269,7 +268,6 @@ def test_connection(server: str, key: str, secret: str = "", device: str = "") -
         req_health = urllib.request.Request(health_url, method="GET", headers={"User-Agent": "APA-Tracker/1.0"})
         with urllib.request.urlopen(req_health, timeout=6) as resp:
             resp.read()
-            net_latency = (time.perf_counter() - t0) * 1000
     except urllib.error.URLError as e:
         latency = (time.perf_counter() - t0) * 1000
         reason = getattr(e, "reason", str(e))
@@ -321,7 +319,7 @@ def test_connection(server: str, key: str, secret: str = "", device: str = "") -
                 ).hexdigest()
             try:
                 req_usage = urllib.request.Request(usage_url, data=body, method="POST", headers=headers)
-                with urllib.request.urlopen(req_usage, timeout=6) as r2:
+                with urllib.request.urlopen(req_usage, timeout=6):
                     return True, f"Connected & Authenticated! Latency: {total_latency:.1f}ms", total_latency
             except urllib.error.HTTPError as e2:
                 if e2.code == 401:
