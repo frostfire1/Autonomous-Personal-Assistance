@@ -42,6 +42,7 @@ web/tsconfig.tsbuildinfo
 
 # client configs and watcher runtime logs
 tools/dist/*.log
+tools/*.json
 tools/dist/*.json
 !tools/dist/laptop_config.example.json
 tools/build/
