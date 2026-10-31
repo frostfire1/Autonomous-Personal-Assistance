@@ -48,8 +48,11 @@ async def _rate_limited(request: Request, limit: int) -> bool:
 
 async def require_ingest_key(request: Request, x_api_key: str = Header(default="")) -> None:
     """The shared key; a fresh signature over the request when INGEST_HMAC_SECRET is set; a per-minute cap."""
+    from apa import auth_keys
+    from apa.core.db import SessionLocal
     s = get_settings()
-    if not s.ingest_api_key or not secrets.compare_digest(x_api_key, s.ingest_api_key):
+    sm = getattr(request.app.state, "sessionmaker", SessionLocal) if hasattr(request.app, "state") else SessionLocal
+    if not await auth_keys.is_key_authorized(x_api_key, s.ingest_api_key, sm):
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "bad api key")
     if s.ingest_hmac_secret:
         ts = request.headers.get("x-timestamp", "")
@@ -66,8 +69,19 @@ async def require_ingest_key(request: Request, x_api_key: str = Header(default="
 
 
 @router.api_route("/test", methods=["GET", "POST"], dependencies=[Depends(require_ingest_key)])
-async def test_auth() -> dict[str, object]:
+async def test_auth(request: Request) -> dict[str, object]:
     """Test endpoint for desktop/laptop trackers to verify connection, API key, & HMAC signature."""
+    dev = request.headers.get("x-device-name", "") or request.query_params.get("device", "")
+    if dev and hasattr(request.app, "state") and getattr(request.app.state, "arq", None):
+        try:
+            import json
+            await request.app.state.arq.set(
+                f"apa:device:heartbeat:{dev}",
+                json.dumps({"device": dev, "kind": "desktop", "ts": time.time()}),
+                ex=14 * 86400,
+            )
+        except Exception:
+            pass
     return {"ok": True, "message": "Authentication successful", "ts": time.time()}
 
 
@@ -117,11 +131,22 @@ class UsageIn(BaseModel):
 
 
 @router.post("/usage", dependencies=[Depends(require_ingest_key)])
-async def ingest_usage(body: UsageIn) -> dict[str, object]:
+async def ingest_usage(body: UsageIn, request: Request) -> dict[str, object]:
     """A device's active time per app for one day (from ActivityWatch). Replaces what that device sent for that day, so a
     re-push is harmless. Only app names and seconds are kept: no window titles, no URLs."""
     from apa import usage
     from apa.core.db import SessionLocal
+
+    if hasattr(request.app, "state") and getattr(request.app.state, "arq", None):
+        try:
+            import json
+            await request.app.state.arq.set(
+                f"apa:device:heartbeat:{body.device}",
+                json.dumps({"device": body.device, "kind": body.kind, "ts": time.time(), "apps_count": len(body.apps)}),
+                ex=14 * 86400,
+            )
+        except Exception:
+            pass
 
     kept = await usage.store(SessionLocal, body.device, body.kind, body.day, [a.model_dump() for a in body.apps])
     return {"ok": True, "apps": kept}

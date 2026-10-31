@@ -12,6 +12,7 @@ const PANELS = [
   ["/debates", "Decisions"],
   ["/health", "Health"],
   ["/security", "Security"],
+  ["/devices", "Devices"],
   ["/logs", "Conversations"],
   ["/about", "About me"],
   ["/skills", "Skills"],

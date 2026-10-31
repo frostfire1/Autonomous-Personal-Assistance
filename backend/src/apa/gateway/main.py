@@ -10,6 +10,7 @@ from apa.core.redis import arq_redis_settings
 from apa.gateway.routers import (
     briefing,
     dashboard,
+    devices,
     health,
     ingest,
     inspect,
@@ -49,6 +50,7 @@ app.include_router(prefs.router)
 app.include_router(llm.router)
 app.include_router(setup.router)
 app.include_router(news.router)
+app.include_router(devices.router)
 app.include_router(update.router)
 
 
