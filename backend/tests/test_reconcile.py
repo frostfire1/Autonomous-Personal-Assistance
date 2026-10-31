@@ -72,6 +72,18 @@ def test_a_known_fee_folded_into_a_payment_is_split_out():
     assert not p.catchup
 
 
+def test_a_credit_line_is_never_folded_with_a_fee():
+    # If the ledger has money in of 50.000 and the statement has a credit of 52.500,
+    # it must NOT match as a folded fee of 2.500; it falls through to catchup.
+    p = plan(
+        [line(10, 52500, "TRF DARI ANDI", direction="credit")],
+        [entry(1, 10, 50000, direction="in")],
+    )
+    assert not p.matched
+    assert len(p.catchup) == 1
+    assert p.catchup[0].direction == "credit"
+
+
 def test_an_unknown_difference_is_not_taken_for_a_fee():
     p = plan([line(10, 20777)], [entry(1, 10, 20000)])
     assert not p.matched and len(p.catchup) == 1  # 777 is not a known fee: a different payment
